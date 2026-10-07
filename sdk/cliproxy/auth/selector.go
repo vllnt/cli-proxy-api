@@ -51,8 +51,17 @@ type smoothWeightedState struct {
 type weightedSelectorStateModelKey struct{}
 
 func withWeightedSelectorStateModel(ctx context.Context, selector Selector, routeModel string) context.Context {
+	if affinity, ok := selector.(*SessionAffinitySelector); ok {
+		selector = affinity.fallback
+	}
+	if aware, ok := selector.(*QuotaAwareSelector); ok {
+		selector = aware.fallback()
+	}
 	if _, ok := selector.(*WeightedRoundRobinSelector); !ok || strings.TrimSpace(routeModel) == "" {
 		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	return context.WithValue(ctx, weightedSelectorStateModelKey{}, routeModel)
 }
@@ -442,14 +451,19 @@ func authWebsocketsEnabled(auth *Auth) bool {
 	return false
 }
 
-func preferCodexWebsocketAuths(ctx context.Context, provider string, available []*Auth) []*Auth {
+type selectorWebsocketProviderKey struct{}
+
+func preferWebsocketAuths(ctx context.Context, provider string, available []*Auth) []*Auth {
 	if len(available) == 0 {
 		return available
 	}
 	if !cliproxyexecutor.DownstreamWebsocket(ctx) {
 		return available
 	}
-	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+	if provider == "mixed" && ctx != nil {
+		provider, _ = ctx.Value(selectorWebsocketProviderKey{}).(string)
+	}
+	if !providerPrefersWebsocketTransport(provider) {
 		return available
 	}
 
@@ -466,11 +480,11 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 	return available
 }
 
-func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {
+func collectAvailableByPriority(auths []*Auth, model string, now time.Time, aware *QuotaAwareSelector) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {
 	available = make(map[int][]*Auth)
 	for i := 0; i < len(auths); i++ {
 		candidate := auths[i]
-		blocked, reason, next := isAuthBlockedForModel(candidate, model, now)
+		blocked, reason, next := authBlockWithQuota(candidate, model, now, aware)
 		if !blocked {
 			priority := authPriority(candidate)
 			available[priority] = append(available[priority], candidate)
@@ -501,8 +515,19 @@ func getSelectorAvailableAuthsAcrossPriorities(ctx context.Context, auths []*Aut
 }
 
 func getSelectorAvailableAuthsWithPriorityMode(ctx context.Context, auths []*Auth, provider, model string, now time.Time, allPriorities bool) ([]*Auth, error) {
+	return getSelectorAvailableAuthsWithQuota(ctx, auths, provider, model, now, allPriorities, nil)
+}
+
+func getSelectorAvailableAuthsWithQuota(ctx context.Context, auths []*Auth, provider, model string, now time.Time, allPriorities bool, aware *QuotaAwareSelector) ([]*Auth, error) {
 	if ctx != nil {
 		if validated, _ := ctx.Value(prevalidatedAuthCandidatesKey{}).(bool); validated && len(auths) > 0 {
+			if aware != nil {
+				var errQuota error
+				auths, errQuota = aware.usable(auths, provider, model, now)
+				if errQuota != nil {
+					return nil, errQuota
+				}
+			}
 			// The manager already resolved each credential's upstream model and supplied
 			// ID-sorted candidates. Rechecking the alias or an empty model would apply
 			// unrelated cooldowns. Affinity bindings may span all priority tiers, but
@@ -513,7 +538,7 @@ func getSelectorAvailableAuthsWithPriorityMode(ctx context.Context, auths []*Aut
 			return auths, nil
 		}
 	}
-	return getAvailableAuthsWithPriorityMode(auths, provider, model, now, allPriorities)
+	return getAvailableAuthsWithQuota(auths, provider, model, now, allPriorities, aware)
 }
 
 func getAvailableAuthsAcrossPriorities(auths []*Auth, provider, model string, now time.Time) ([]*Auth, error) {
@@ -521,11 +546,15 @@ func getAvailableAuthsAcrossPriorities(auths []*Auth, provider, model string, no
 }
 
 func getAvailableAuthsWithPriorityMode(auths []*Auth, provider, model string, now time.Time, allPriorities bool) ([]*Auth, error) {
+	return getAvailableAuthsWithQuota(auths, provider, model, now, allPriorities, nil)
+}
+
+func getAvailableAuthsWithQuota(auths []*Auth, provider, model string, now time.Time, allPriorities bool, aware *QuotaAwareSelector) ([]*Auth, error) {
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}
 	}
 
-	availableByPriority, cooldownCount, earliest := collectAvailableByPriority(auths, model, now)
+	availableByPriority, cooldownCount, earliest := collectAvailableByPriority(auths, model, now, aware)
 	if len(availableByPriority) == 0 {
 		if cooldownCount == len(auths) && !earliest.IsZero() {
 			providerForError := provider
@@ -618,7 +647,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	if err != nil {
 		return nil, err
 	}
-	available = preferCodexWebsocketAuths(ctx, provider, available)
+	available = preferWebsocketAuths(ctx, provider, available)
 	key := provider + ":" + canonicalModelKey(model)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -676,7 +705,7 @@ func (s *WeightedRoundRobinSelector) Pick(ctx context.Context, provider, model s
 	if errAvailable != nil {
 		return nil, errAvailable
 	}
-	available = preferCodexWebsocketAuths(ctx, provider, available)
+	available = preferWebsocketAuths(ctx, provider, available)
 	stateModel := weightedSelectorStateModel(ctx, model)
 	key := provider + ":" + canonicalModelKey(stateModel)
 
@@ -816,7 +845,7 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	if err != nil {
 		return nil, err
 	}
-	available = preferCodexWebsocketAuths(ctx, provider, available)
+	available = preferWebsocketAuths(ctx, provider, available)
 	return available[0], nil
 }
 
@@ -914,6 +943,10 @@ type SessionAffinitySelector struct {
 	cache            *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool
+	// bindMu closes the get-choose-bind window for cold explicit sessions. The
+	// cache itself is thread-safe, but a separate lookup and write can otherwise
+	// let a concurrent first turn choose different credentials.
+	bindMu sync.Mutex
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -1014,22 +1047,18 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		}
 	}
 	now := time.Now()
-	availabilityCandidates := auths
-	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted {
-		availabilityCandidates = positiveWeightAuths(auths)
-	}
 	if primaryID == "" {
-		fallbackAuths, errAvailable := getSelectorAvailableAuths(ctx, availabilityCandidates, provider, model, now)
+		fallbackAuths, errAvailable := selectorUsableAuths(ctx, s.fallback, auths, provider, model, now)
 		if errAvailable != nil {
 			return nil, errAvailable
 		}
 		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
-		return s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
+		return s.fallback.Pick(ctx, provider, model, opts, highestPriorityAuths(fallbackAuths))
 	}
 
 	// A single availability pass serves both lookups: the bound credential is validated against
 	// every priority tier, while the fallback selector keeps seeing only the highest tier.
-	available, err := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, now)
+	available, err := selectorUsableAuths(ctx, s.fallback, auths, provider, model, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,15 +1085,36 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		}
 	}
 
-	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+	findAvailable := func(authID string) *Auth {
 		for _, auth := range available {
-			if auth.ID == cachedAuthID {
-				bind(auth.ID)
-				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
-				return auth, nil
+			if auth != nil && auth.ID == authID {
+				return auth
 			}
 		}
-		// Cached auth not available, reselect via fallback selector for even distribution
+		return nil
+	}
+
+	// A cache hit does not need serialization. Only a miss or an unavailable
+	// binding enters the lock, where the cache is checked again before choosing
+	// and binding so concurrent cold turns converge on one credential.
+	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+		if auth := findAvailable(cachedAuthID); auth != nil {
+			bind(auth.ID)
+			entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+			return auth, nil
+		}
+	}
+
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+
+	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+		if auth := findAvailable(cachedAuthID); auth != nil {
+			bind(auth.ID)
+			entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+			return auth, nil
+		}
+		// Cached auth not available, reselect via fallback selector for even distribution.
 		auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
 		if err != nil {
 			return nil, err
@@ -1134,11 +1184,7 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 		opts.Metadata[cliproxyexecutor.LCPEnvironmentDigestMetadataKey] = envDigest
 	}
 
-	availabilityCandidates := auths
-	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted {
-		availabilityCandidates = positiveWeightAuths(auths)
-	}
-	available, errAvailable := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, time.Now())
+	available, errAvailable := selectorUsableAuths(ctx, s.fallback, auths, provider, model, time.Now())
 	if errAvailable != nil {
 		return nil, true, errAvailable
 	}
