@@ -1100,7 +1100,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		if auth := findAvailable(cachedAuthID); auth != nil {
 			bind(auth.ID)
-			entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+			entry.Debug("session-affinity: cache hit")
 			return auth, nil
 		}
 	}
@@ -1111,7 +1111,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		if auth := findAvailable(cachedAuthID); auth != nil {
 			bind(auth.ID)
-			entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+			entry.Debug("session-affinity: cache hit")
 			return auth, nil
 		}
 		// Cached auth not available, reselect via fallback selector for even distribution.
