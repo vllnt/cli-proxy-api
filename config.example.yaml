@@ -176,6 +176,15 @@ routing:
     # Retry rounds that need no wait remain controlled by request-retry.
     max-retry-interval: 30
 
+    # Maximum total time in seconds one execution may keep starting new credential attempts
+    # after a failure, across credentials and retry rounds. An attempt already running, or a
+    # stream already delivering, is never cut short. A round that waits for a cooldown may start
+    # up to its jitter (at most 2s) late, and each streaming bootstrap retry
+    # (requests.streaming.bootstrap-retries) starts a fresh budget. Ignored when CLIProxyAPIHome
+    # is enabled. 0 or below means no limit.
+    # Default: 0
+    max-retry-duration: 0
+
   cooldown:
     # When true, disable auth/model cooldown scheduling globally (prevents blackout windows after failure states).
     # A credential/provider disable-cooling value, when present, overrides this global value.

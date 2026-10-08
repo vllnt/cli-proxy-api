@@ -100,6 +100,10 @@ type Config struct {
 	// forbids positive cooldown waits; it does not disable same-round credential
 	// failover or immediate additional rounds allowed by RequestRetry.
 	MaxRetryInterval int `yaml:"max-retry-interval" json:"max-retry-interval"`
+	// MaxRetryDuration bounds, in seconds, how long one execution may keep starting new
+	// credential attempts after a failure. An attempt that is already running is never
+	// cut short. 0 or below means no limit.
+	MaxRetryDuration int `yaml:"max-retry-duration" json:"max-retry-duration"`
 
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`

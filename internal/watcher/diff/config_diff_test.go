@@ -742,6 +742,7 @@ func TestTrimStrings(t *testing.T) {
 }
 
 func TestBuildConfigChangeDetails_OverloadFailoverKeys(t *testing.T) {
-	details := BuildConfigChangeDetails(&config.Config{}, &config.Config{OverloadCooldownSeconds: 5})
+	details := BuildConfigChangeDetails(&config.Config{}, &config.Config{OverloadCooldownSeconds: 5, MaxRetryDuration: 90})
 	expectContains(t, details, "overload-cooldown-seconds: 0 -> 5")
+	expectContains(t, details, "max-retry-duration: 0 -> 90")
 }

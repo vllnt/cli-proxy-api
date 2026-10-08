@@ -6,6 +6,8 @@ func TestParseConfigBytesOverloadFailoverKeys(t *testing.T) {
 	cfg, errParse := ParseConfigBytes([]byte(`
 config-version: 8
 routing:
+  retry:
+    max-retry-duration: 90
   cooldown:
     overload-cooldown-seconds: 5
 oauth:
@@ -16,8 +18,8 @@ oauth:
 	if errParse != nil {
 		t.Fatalf("parse: %v", errParse)
 	}
-	if cfg.OverloadCooldownSeconds != 5 || !cfg.Codex.StreamBootstrapBuffering {
-		t.Fatalf("overload-cooldown-seconds=%d stream-bootstrap-buffering=%v, want 5, true",
-			cfg.OverloadCooldownSeconds, cfg.Codex.StreamBootstrapBuffering)
+	if cfg.MaxRetryDuration != 90 || cfg.OverloadCooldownSeconds != 5 || !cfg.Codex.StreamBootstrapBuffering {
+		t.Fatalf("max-retry-duration=%d overload-cooldown-seconds=%d stream-bootstrap-buffering=%v, want 90, 5, true",
+			cfg.MaxRetryDuration, cfg.OverloadCooldownSeconds, cfg.Codex.StreamBootstrapBuffering)
 	}
 }
