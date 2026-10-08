@@ -22,9 +22,9 @@ import (
 
 const capacityTestModel = "gpt-6-astra"
 
-// codexOverloadedStream replays what the Codex upstream sent CLIPROXY01 on 2026-10-08: an HTTP 200
-// stream whose handshake, heartbeats and an empty reasoning item arrive before the request is shed
-// with server_is_overloaded. Nothing in it is generated output.
+// codexOverloadedStream is how the Codex upstream sheds load: an HTTP 200 stream whose handshake,
+// heartbeats and an empty reasoning item arrive before the request is shed with
+// server_is_overloaded. Nothing in it is generated output.
 const codexOverloadedStream = "event: response.created\n" +
 	"data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_a\",\"status\":\"in_progress\"}}\n\n" +
 	"event: response.in_progress\n" +
@@ -61,7 +61,7 @@ type capacityHarness struct {
 }
 
 // newCapacityHarness registers codex credentials "a" and "b" (a is picked first) behind one
-// upstream that serves streams[account], with session affinity and cooling enabled as in production.
+// upstream that serves streams[account], with session affinity and cooling enabled.
 func newCapacityHarness(t *testing.T, cfg *config.Config, streams map[string]string) *capacityHarness {
 	t.Helper()
 	h := &capacityHarness{cfg: cfg}
@@ -119,8 +119,8 @@ func (h *capacityHarness) takeAttempts() []string {
 	return attempts
 }
 
-// productionRetryConfig mirrors the CLIPROXY01 routing.retry settings of 2026-10-08.
-func productionRetryConfig() *config.Config {
+// smallRetryConfig allows one extra retry round and two credentials per round.
+func smallRetryConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.RequestRetry = 1
 	cfg.MaxRetryCredentials = 2
@@ -128,11 +128,11 @@ func productionRetryConfig() *config.Config {
 	return cfg
 }
 
-// Characterizes the 2026-10-08 incident: without bootstrap buffering the handshake is already
+// Characterizes the default: without bootstrap buffering the handshake is already
 // committed when the overload arrives, so the client receives it inside an HTTP 200 stream (the
 // Codex CLI reports "Selected model is at capacity") and no other credential is tried.
 func TestCodexCapacityRejectionReachesClientWithoutBootstrapBuffering(t *testing.T) {
-	h := newCapacityHarness(t, productionRetryConfig(), map[string]string{"a": codexOverloadedStream, "b": codexCompletedStream("b")})
+	h := newCapacityHarness(t, smallRetryConfig(), map[string]string{"a": codexOverloadedStream, "b": codexCompletedStream("b")})
 
 	recorder := h.respond(t, "session-unbuffered")
 
@@ -149,7 +149,7 @@ func TestCodexCapacityRejectionReachesClientWithoutBootstrapBuffering(t *testing
 // request is served by another credential. The overloaded credential is cooled only briefly and only
 // for the model that was shed, and the session moves to the credential that served it.
 func TestCodexCapacityRejectionFailsOverBeforeFirstByte(t *testing.T) {
-	cfg := productionRetryConfig()
+	cfg := smallRetryConfig()
 	cfg.Codex.StreamBootstrapBuffering = true
 	cfg.OverloadCooldownSeconds = 5
 	h := newCapacityHarness(t, cfg, map[string]string{"a": codexOverloadedStream, "b": codexCompletedStream("b")})
@@ -194,7 +194,7 @@ func TestCodexCapacityRejectionFailsOverBeforeFirstByte(t *testing.T) {
 // When every credential is shed, the client receives the overload as a pre-stream 503 rather than
 // inside a 200 stream, so clients that retry 5xx (the Codex CLI transport does) retry the request.
 func TestCodexCapacityRejectionOnEveryCredentialIsPreStream503(t *testing.T) {
-	cfg := productionRetryConfig()
+	cfg := smallRetryConfig()
 	cfg.Codex.StreamBootstrapBuffering = true
 	cfg.OverloadCooldownSeconds = 5
 	cfg.MaxRetryInterval = 0 // skip the wall-clock wait for the overload cooldown between rounds
@@ -213,7 +213,7 @@ func TestCodexCapacityRejectionOnEveryCredentialIsPreStream503(t *testing.T) {
 // Once generated output has reached the client the request is never replayed elsewhere: the overload
 // is delivered in-stream after the partial output.
 func TestCodexCapacityRejectionAfterOutputIsNotRetried(t *testing.T) {
-	cfg := productionRetryConfig()
+	cfg := smallRetryConfig()
 	cfg.Codex.StreamBootstrapBuffering = true
 	cfg.OverloadCooldownSeconds = 5
 	h := newCapacityHarness(t, cfg, map[string]string{"a": codexOverloadedAfterOutputStream, "b": codexCompletedStream("b")})

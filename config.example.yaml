@@ -924,7 +924,7 @@ oauth:
       # conductor instead, which waits on the same context - but a client-side request timeout, not
       # proxy_read_timeout, is what bounds them.
       # Pair it with routing.cooldown.overload-cooldown-seconds so a shed request does not take the
-      # credential out of rotation for a minute (see docs/dispatch-design.md).
+      # credential out of rotation for a minute.
       # Default: false
       stream-bootstrap-buffering: false
       # Optional maximum duration to hold back uncommitted response headers during bootstrap buffering.
