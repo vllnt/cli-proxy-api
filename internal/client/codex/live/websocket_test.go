@@ -208,6 +208,9 @@ func TestHandleDirectWebsocketRelaysStandardRealtimeFrames(t *testing.T) {
 			return
 		}
 		upstreamMessage <- string(payload)
+		if errWrite := connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":17,"window_minutes":10080,"reset_after_seconds":3600}}}`)); errWrite != nil {
+			return
+		}
 		_ = connection.WriteMessage(messageType, append([]byte("echo:"), payload...))
 	}))
 	defer upstreamServer.Close()
@@ -251,12 +254,23 @@ func TestHandleDirectWebsocketRelaysStandardRealtimeFrames(t *testing.T) {
 	if errWrite := connection.WriteMessage(websocket.TextMessage, []byte(event)); errWrite != nil {
 		t.Fatalf("write downstream event: %v", errWrite)
 	}
+	_, quotaFrame, errRead := connection.ReadMessage()
+	if errRead != nil {
+		t.Fatalf("read quota frame: %v", errRead)
+	}
+	if string(quotaFrame) != `{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":17,"window_minutes":10080,"reset_after_seconds":3600}}}` {
+		t.Fatalf("quota frame = %s", quotaFrame)
+	}
 	_, echoed, errRead := connection.ReadMessage()
 	if errRead != nil {
 		t.Fatalf("read echoed event: %v", errRead)
 	}
 	if string(echoed) != "echo:"+event {
 		t.Fatalf("echoed event = %s", echoed)
+	}
+	observed, okObserved := manager.GetByID("codex-oauth")
+	if !okObserved || observed == nil || observed.Quota.Signals["X-Codex-Primary-Used-Percent"] != "17" {
+		t.Fatalf("websocket quota observation = %#v; want primary usage 17", observed)
 	}
 
 	select {

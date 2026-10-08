@@ -177,6 +177,7 @@ func (h *Handler) HandleHangup(c *gin.Context) {
 		}
 	}()
 	helps.RecordAPIResponseMetadata(ctx, runtimeConfig, response.StatusCode, callResponseHeaders(response.Header))
+	h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", session.model, response.StatusCode, response.Header)
 	responseBody, errResponse := readLimitedBody(response.Body)
 	if errResponse != nil {
 		helps.AppendAPIResponseChunk(ctx, runtimeConfig, responseBody)

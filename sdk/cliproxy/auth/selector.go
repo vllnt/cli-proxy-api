@@ -1047,13 +1047,20 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		}
 	}
 	now := time.Now()
+	quotaAware := quotaSelector(s.fallback)
+	fallbackCandidates := func(available []*Auth) []*Auth {
+		if quotaAware != nil {
+			return available
+		}
+		return highestPriorityAuths(available)
+	}
 	if primaryID == "" {
 		fallbackAuths, errAvailable := selectorUsableAuths(ctx, s.fallback, auths, provider, model, now)
 		if errAvailable != nil {
 			return nil, errAvailable
 		}
 		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
-		return s.fallback.Pick(ctx, provider, model, opts, highestPriorityAuths(fallbackAuths))
+		return s.fallback.Pick(ctx, provider, model, opts, fallbackCandidates(fallbackAuths))
 	}
 
 	// A single availability pass serves both lookups: the bound credential is validated against
@@ -1062,7 +1069,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if err != nil {
 		return nil, err
 	}
-	fallbackAuths := highestPriorityAuths(available)
+	fallbackAuths := fallbackCandidates(available)
 
 	modelKey := canonicalModelKey(model)
 	cacheKey := provider + "::" + primaryID + "::" + modelKey
@@ -1165,6 +1172,13 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	if s == nil || s.matcher == nil {
 		return nil, false, nil
 	}
+	quotaAware := quotaSelector(s.fallback)
+	fallbackCandidates := func(available []*Auth) []*Auth {
+		if quotaAware != nil {
+			return available
+		}
+		return highestPriorityAuths(available)
+	}
 	namespace := lcpAffinityNamespace(provider, model, opts.Metadata)
 	if namespace == "" {
 		return nil, false, nil
@@ -1232,7 +1246,7 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 		}
 	}
 
-	fallbackAuths := highestPriorityAuths(available)
+	fallbackAuths := fallbackCandidates(available)
 	auth, errPick := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
 	if errPick != nil {
 		return nil, true, errPick

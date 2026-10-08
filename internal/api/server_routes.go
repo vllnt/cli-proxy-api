@@ -516,6 +516,7 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		defer func() { _ = closeResponseBody() }()
 	}
 	helps.RecordAPIResponseMetadata(ctx, s.cfg, resp.StatusCode, resp.Header.Clone())
+	s.handlers.AuthManager.RecordHTTPResult(ctx, selected.ID, "codex", routeModel, resp.StatusCode, resp.Header)
 	upstreamBody, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		helps.AppendAPIResponseChunk(ctx, s.cfg, upstreamBody)

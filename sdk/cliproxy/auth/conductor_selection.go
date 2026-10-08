@@ -1009,6 +1009,9 @@ func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginSc
 	if !okStrategy {
 		return nil, false, nil
 	}
+	if quotaSelector(m.Selector()) == nil {
+		return m.pickViaBuiltinScheduler(ctx, strategy, providerKey, providers, model, opts, tried)
+	}
 	// Native delegation must use the exact membership approved for the plugin,
 	// including passive quota and weight filtering. Carry it through the native
 	// scheduler's existing eligibility predicate so its rotation state is kept.
@@ -1829,7 +1832,11 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	}
 	m.mu.RUnlock()
 
-	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available)
+	pluginCandidates := available
+	if aware := quotaSelector(selector); aware != nil {
+		pluginCandidates = aware.schedulerCandidates(ctx, provider, model, selectorAuths)
+	}
+	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, pluginCandidates)
 	if errPick != nil {
 		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errPick)
 		return nil, nil, errPick
@@ -2171,7 +2178,11 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	}
 	m.mu.RUnlock()
 
-	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available)
+	pluginCandidates := available
+	if aware := quotaSelector(selector); aware != nil {
+		pluginCandidates = aware.schedulerCandidates(ctx, "mixed", model, selectorAuths)
+	}
+	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, pluginCandidates)
 	if errPick != nil {
 		m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errPick)
 		return nil, nil, "", errPick

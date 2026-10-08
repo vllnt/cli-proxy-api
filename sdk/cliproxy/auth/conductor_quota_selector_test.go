@@ -132,7 +132,7 @@ func TestManagerQuotaAwareMixedProviderAndRetryExclusions(t *testing.T) {
 	now := time.Now()
 	ctx := context.Background()
 	const model = "quota-mixed"
-	s := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &RoundRobinSelector{}})
+	s := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &RoundRobinSelector{}, randFunc: func() float64 { return 0.999 }})
 	t.Cleanup(s.Stop)
 	manager := NewManager(nil, s, nil)
 	for _, candidate := range []*Auth{
@@ -174,6 +174,27 @@ func TestManagerQuotaAwareMixedProviderAndRetryExclusions(t *testing.T) {
 	got, _, provider, errPick = manager.pickNextMixed(ctx, []string{"claude", "codex", "gemini"}, model, cliproxyexecutor.Options{}, nil)
 	if errPick != nil || got == nil || got.ID != "quota-0" || provider != "gemini" {
 		t.Fatalf("neutral mixed fallback = %v, %s, %v", got, provider, errPick)
+	}
+}
+
+func TestManagerRecordHTTPResultObservesHeaders(t *testing.T) {
+	now := time.Now()
+	auth := quotaTestAuth("external-codex", "codex", now.Add(-time.Second), nil)
+	manager := NewManager(nil, &QuotaAwareSelector{Fallback: &FillFirstSelector{}}, nil)
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	headers := http.Header{}
+	for key, value := range quotaTestSignals("codex", now, 17, 23) {
+		headers.Set(key, value)
+	}
+	manager.RecordHTTPResult(context.Background(), auth.ID, auth.Provider, "gpt-5", http.StatusOK, headers)
+	got, ok := manager.GetByID(auth.ID)
+	if !ok || got == nil {
+		t.Fatalf("Get(%s) = %v, %v", auth.ID, got, ok)
+	}
+	if got.Quota.ObservedAt.IsZero() || got.Quota.Signals["X-Codex-Primary-Used-Percent"] != "17" {
+		t.Fatalf("external response quota = %#v; want fresh primary signal", got.Quota)
 	}
 }
 

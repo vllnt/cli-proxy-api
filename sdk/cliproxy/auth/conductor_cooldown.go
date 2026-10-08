@@ -1031,6 +1031,44 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	m.updateSessionAffinity(result)
 }
 
+// RecordHTTPResult records a response returned by an executor-owned HTTP route.
+// These routes do not pass through Execute/ExecuteStream, so the manager must
+// explicitly feed their response headers and status into the same result path.
+// The method keeps the response body out of auth state and logs.
+func (m *Manager) RecordHTTPResult(ctx context.Context, authID, provider, model string, status int, headers http.Header) {
+	if m == nil || strings.TrimSpace(authID) == "" || status <= 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(headers) > 0 {
+		if internallogging.GetResponseHeaders(ctx) == nil {
+			ctx = internallogging.WithResponseHeadersHolder(ctx)
+			internallogging.SetResponseHeaders(ctx, headers.Clone())
+		} else {
+			internallogging.MergeResponseHeaders(ctx, headers)
+		}
+	}
+	result := Result{
+		AuthID:   authID,
+		Provider: provider,
+		Model:    model,
+		Success:  (status >= http.StatusOK && status < http.StatusMultipleChoices) || status == http.StatusSwitchingProtocols,
+	}
+	if !result.Success {
+		result.Error = &Error{
+			Code:       "upstream_http_error",
+			Message:    fmt.Sprintf("upstream returned HTTP %d", status),
+			HTTPStatus: status,
+		}
+		if status == http.StatusTooManyRequests {
+			result.CredentialScope = true
+		}
+	}
+	m.MarkResult(ctx, result)
+}
+
 func (m *Manager) updateSessionAffinity(result Result) {
 	if m == nil {
 		return

@@ -361,6 +361,7 @@ func (h *Handler) Handle(c *gin.Context) {
 
 	responseHeaders := callResponseHeaders(resp.Header)
 	helps.RecordAPIResponseMetadata(ctx, runtimeConfig, resp.StatusCode, responseHeaders)
+	h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", model, resp.StatusCode, resp.Header)
 	responseBody, errResponse := readLimitedBody(resp.Body)
 	if errResponse != nil {
 		helps.AppendAPIResponseChunk(ctx, runtimeConfig, responseBody)

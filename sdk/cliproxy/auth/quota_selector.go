@@ -81,6 +81,7 @@ func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, o
 		}).Debug("quota-aware candidate")
 	}
 	if knownCount == 0 {
+		available = preferWebsocketAuths(ctx, provider, available)
 		return fallback.Pick(ctx, provider, model, opts, available)
 	}
 	beforeTier := available
@@ -282,6 +283,37 @@ func quotaSelector(selector Selector) *QuotaAwareSelector {
 	}
 	aware, _ := selector.(*QuotaAwareSelector)
 	return aware
+}
+
+// schedulerCandidates applies the same priority and pacing gate used by Pick
+// before an external scheduler is allowed to choose an auth. Unknown telemetry
+// remains neutral, but still respects the highest configured priority tier.
+func (s *QuotaAwareSelector) schedulerCandidates(ctx context.Context, provider, model string, auths []*Auth) []*Auth {
+	if s == nil || len(auths) == 0 {
+		return auths
+	}
+	now := s.now()
+	auths = selectorWeightCandidates(s, auths)
+	available, errAvailable := getSelectorAvailableAuthsWithQuota(ctx, auths, provider, model, now, true, s)
+	if errAvailable != nil || len(available) == 0 {
+		return available
+	}
+	views := make([]quotaRoutingView, len(available))
+	knownCount := 0
+	for i, candidate := range available {
+		views[i] = quotaViewForAuth(candidate, now, s.maxAge())
+		if !views[i].known {
+			views[i].score = 1
+			views[i].reason = "unknown"
+		} else {
+			knownCount++
+		}
+	}
+	if knownCount == 0 {
+		return highestPriorityAuths(available)
+	}
+	available, _ = pacedPriorityTier(available, views)
+	return preferWebsocketAuths(ctx, provider, available)
 }
 
 func selectorWeightCandidates(selector Selector, auths []*Auth) []*Auth {

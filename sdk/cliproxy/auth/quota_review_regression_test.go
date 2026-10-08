@@ -106,6 +106,58 @@ func TestQuotaReviewManagerPassesHotHigherTierToQuotaSelector(t *testing.T) {
 	}
 }
 
+func TestQuotaReviewPluginCannotBypassPacedPriorityTier(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	selector := &QuotaAwareSelector{
+		Fallback: &FillFirstSelector{},
+		nowFunc:  func() time.Time { return now },
+		randFunc: func() float64 { return 0 },
+	}
+	manager := NewManager(nil, selector, nil)
+	manager.RegisterExecutor(&mockCustomErrorExecutor{identifier: "claude"})
+	high := quotaTestAuth("plugin-high-hot", "claude", now, quotaTestSignals("claude", now, 95, 20))
+	high.Attributes = map[string]string{"priority": "2"}
+	low := quotaTestAuth("plugin-low-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	low.Attributes = map[string]string{"priority": "1"}
+	for _, candidate := range []*Auth{high, low} {
+		if _, errRegister := manager.Register(context.Background(), candidate); errRegister != nil {
+			t.Fatal(errRegister)
+		}
+	}
+	plugin := &fakePluginScheduler{
+		resp:    pluginapi.SchedulerPickResponse{Handled: true, AuthID: high.ID},
+		handled: true,
+	}
+	manager.SetPluginScheduler(plugin)
+
+	got, _, errPick := manager.pickNext(context.Background(), "claude", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil || got == nil || got.ID != low.ID {
+		t.Fatalf("plugin-paced pick = %v, %v; want lower cool tier %s", got, errPick, low.ID)
+	}
+	if len(plugin.requests) != 1 || len(plugin.requests[0].Candidates) != 1 || plugin.requests[0].Candidates[0].ID != low.ID {
+		t.Fatalf("plugin candidates = %#v; want only %s", plugin.requests, low.ID)
+	}
+}
+
+func TestQuotaReviewSessionAffinityPassesAllTiersToQuotaSelector(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	high := quotaTestAuth("affinity-high-hot", "claude", now, quotaTestSignals("claude", now, 95, 20))
+	high.Attributes = map[string]string{"priority": "2"}
+	low := quotaTestAuth("affinity-low-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	low.Attributes = map[string]string{"priority": "1"}
+	selector := NewSessionAffinitySelector(&QuotaAwareSelector{
+		Fallback: &FillFirstSelector{},
+		nowFunc:  func() time.Time { return now },
+		randFunc: func() float64 { return 0 },
+	})
+	t.Cleanup(selector.Stop)
+	opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": []string{"new-session"}}}
+	got, errPick := selector.Pick(context.Background(), "claude", "model", opts, []*Auth{high, low})
+	if errPick != nil || got == nil || got.ID != low.ID {
+		t.Fatalf("quota-aware affinity pick = %v, %v; want lower cool tier %s", got, errPick, low.ID)
+	}
+}
+
 func authIDs(auths []*Auth) []string {
 	ids := make([]string, 0, len(auths))
 	for _, auth := range auths {
@@ -169,13 +221,14 @@ func TestQuotaReviewXAIWebsocketPreferenceOffAndOn(t *testing.T) {
 					}
 				}
 				ctx := cliproxyexecutor.WithDownstreamWebsocket(context.Background())
+				want := "xai-ws-a"
 				got, _, errPick := manager.pickNext(ctx, "xai", "", cliproxyexecutor.Options{}, nil)
-				if errPick != nil || got == nil || got.ID != "xai-ws-a" {
-					t.Fatalf("websocket pick = %v, %v; want xai-ws-a", got, errPick)
+				if errPick != nil || got == nil || got.ID != want {
+					t.Fatalf("websocket pick = %v, %v; want %s", got, errPick, want)
 				}
 				got, _, _, errPick = manager.pickNextMixed(ctx, []string{"xai"}, "", cliproxyexecutor.Options{}, nil)
-				if errPick != nil || got == nil || got.ID != "xai-ws-a" {
-					t.Fatalf("single-provider mixed websocket pick = %v, %v; want xai-ws-a", got, errPick)
+				if errPick != nil || got == nil || got.ID != want {
+					t.Fatalf("single-provider mixed websocket pick = %v, %v; want %s", got, errPick, want)
 				}
 			})
 		}
