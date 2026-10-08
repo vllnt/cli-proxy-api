@@ -321,8 +321,9 @@ func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling
 	if isCodexModelCapacityError(body) || isUsageLimit {
 		errCode = http.StatusTooManyRequests
 	}
+	overload := errCode >= http.StatusInternalServerError && isCodexServerOverload(body)
 	body = classifyCodexStatusError(errCode, body)
-	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped}
+	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped, overload: overload}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
 	}
@@ -613,9 +614,18 @@ func newCodexBootstrapOverloadErr(body []byte) statusErr {
 // Only these failures justify replacing the whole attempt during bootstrap; every other terminal
 // failure keeps the original in-stream delivery semantics so downstream behaviour is unchanged.
 func isCodexOverloadBootstrapFailure(body []byte) bool {
-	if isCodexModelCapacityError(body) {
+	if isCodexModelCapacityError(body) || isCodexServerOverload(body) {
 		return true
 	}
+	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()))
+	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.code").String()))
+	return errorType == "rate_limit_error" || errorCode == "rate_limit_exceeded"
+}
+
+// isCodexServerOverload reports whether a rejection is the upstream shedding load
+// (server_is_overloaded, or a server_error that asks the caller to retry). Load shedding says
+// nothing about the credential, so the conductor keeps it in rotation after a short cooldown.
+func isCodexServerOverload(body []byte) bool {
 	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()))
 	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.code").String()))
 	errorMessage := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.message").String()))
@@ -624,8 +634,6 @@ func isCodexOverloadBootstrapFailure(body []byte) bool {
 	}
 	switch {
 	case errorType == "service_unavailable_error", errorCode == "server_is_overloaded":
-		return true
-	case errorType == "rate_limit_error", errorCode == "rate_limit_exceeded":
 		return true
 	case (errorType == "server_error" || errorCode == "server_error") && strings.Contains(errorMessage, "you can retry your request"):
 		return true

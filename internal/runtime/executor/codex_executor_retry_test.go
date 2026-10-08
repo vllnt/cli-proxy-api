@@ -232,6 +232,35 @@ func TestNewCodexStatusErrTreatsUsageLimitAsRetryableRateLimit(t *testing.T) {
 	}
 }
 
+// Only 5xx load shedding is marked as overload; quota, capacity and rate-limit rejections keep
+// their 429 cooldown semantics and other 5xx errors keep the transient cooldown.
+func TestNewCodexStatusErrMarksOnlyServerOverloadAsOverload(t *testing.T) {
+	overloaded := `{"error":{"message":"Our servers are currently overloaded. Please try again later.","type":"service_unavailable_error","param":null,"code":"server_is_overloaded"}}`
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{name: "in-stream overload", status: codexTerminalFailureStatus([]byte(overloaded)), body: overloaded, want: true},
+		{name: "bootstrap overload", status: http.StatusServiceUnavailable, body: overloaded, want: true},
+		{name: "retryable server error", status: http.StatusInternalServerError, body: `{"error":{"type":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us."}}`, want: true},
+		{name: "plain bad gateway", status: http.StatusBadGateway, body: `<html>502 Bad Gateway</html>`, want: false},
+		{name: "model capacity", status: http.StatusBadRequest, body: `{"error":{"message":"Selected model is at capacity. Please try a different model."}}`, want: false},
+		{name: "rate limit", status: http.StatusTooManyRequests, body: `{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"slow down"}}`, want: false},
+		{name: "usage limit", status: http.StatusTooManyRequests, body: `{"error":{"type":"usage_limit_reached","resets_in_seconds":120}}`, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := newCodexStatusErr(test.status, []byte(test.body)).IsOverload(); got != test.want {
+				t.Fatalf("IsOverload() = %v, want %v", got, test.want)
+			}
+		})
+	}
+	if bootstrap := newCodexBootstrapOverloadErr([]byte(overloaded)); !bootstrap.IsOverload() || bootstrap.StatusCode() != http.StatusServiceUnavailable {
+		t.Fatalf("bootstrap overload = (%d, %v), want (503, true)", bootstrap.StatusCode(), bootstrap.IsOverload())
+	}
+}
+
 func TestIsCodexUsageLimitError(t *testing.T) {
 	tests := []struct {
 		name string

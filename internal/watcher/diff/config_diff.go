@@ -55,6 +55,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.TransientErrorCooldownSeconds != newCfg.TransientErrorCooldownSeconds {
 		changes = append(changes, fmt.Sprintf("transient-error-cooldown-seconds: %d -> %d", oldCfg.TransientErrorCooldownSeconds, newCfg.TransientErrorCooldownSeconds))
 	}
+	if oldCfg.OverloadCooldownSeconds != newCfg.OverloadCooldownSeconds {
+		changes = append(changes, fmt.Sprintf("overload-cooldown-seconds: %d -> %d", oldCfg.OverloadCooldownSeconds, newCfg.OverloadCooldownSeconds))
+	}
 	if oldCfg.DisableClaudeCloakMode != newCfg.DisableClaudeCloakMode {
 		changes = append(changes, fmt.Sprintf("disable-claude-cloak-mode: %t -> %t", oldCfg.DisableClaudeCloakMode, newCfg.DisableClaudeCloakMode))
 	}

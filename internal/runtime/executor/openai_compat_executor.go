@@ -1068,6 +1068,8 @@ type statusErr struct {
 	msg              string
 	retryAfter       *time.Duration
 	credentialScoped bool
+	// overload marks upstream load shedding, which the conductor cools only briefly.
+	overload bool
 }
 
 func (e statusErr) Error() string {
@@ -1079,6 +1081,7 @@ func (e statusErr) Error() string {
 func (e statusErr) StatusCode() int            { return e.code }
 func (e statusErr) RetryAfter() *time.Duration { return e.retryAfter }
 func (e statusErr) IsCredentialScoped() bool   { return e.credentialScoped }
+func (e statusErr) IsOverload() bool           { return e.overload }
 
 const openAICompatTPMFallbackRetryAfter = time.Minute
 

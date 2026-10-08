@@ -79,6 +79,11 @@ type Config struct {
 	// 0 keeps the legacy default cooldown. Negative values disable these cooldowns.
 	TransientErrorCooldownSeconds int `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
 
+	// OverloadCooldownSeconds controls the per-credential, per-model cooldown for upstream overload
+	// rejections such as Codex server_is_overloaded. Load shedding says nothing about the credential,
+	// so a short cooldown keeps it in rotation. 0 or below keeps the transient error cooldown.
+	OverloadCooldownSeconds int `yaml:"overload-cooldown-seconds" json:"overload-cooldown-seconds"`
+
 	// AuthAutoRefreshWorkers overrides the size of the core auth auto-refresh and manual refresh-all worker pool.
 	// When <= 0, the default worker count is used.
 	AuthAutoRefreshWorkers int `yaml:"auth-auto-refresh-workers" json:"auth-auto-refresh-workers"`
