@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
@@ -241,6 +242,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		ctx = syncMetadataSessionToContext(ctx, execOpts.Metadata)
 		startStream := time.Now()
 		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, execOpts)
+		if streamResult != nil {
+			logging.MergeResponseHeaders(ctx, streamResult.Headers)
+		}
 		errStream = markUpstreamExecutionAttemptFromContext(ctx, errStream)
 		if hasUpstreamExecutionAttempt(errStream) {
 			upstreamErr = errStream
@@ -261,6 +265,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					ctx = syncMetadataSessionToContext(ctx, execOpts.Metadata)
 					startRetry := time.Now()
 					streamResult, errStream = executor.ExecuteStream(ctx, auth, execReq, execOpts)
+					if streamResult != nil {
+						logging.MergeResponseHeaders(ctx, streamResult.Headers)
+					}
 					errStream = markUpstreamExecutionAttemptFromContext(ctx, errStream)
 					if hasUpstreamExecutionAttempt(errStream) {
 						upstreamErr = errStream
@@ -337,6 +344,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					ctx = newUpstreamAttemptContext(ctx)
 					startRetry := time.Now()
 					retryStream, retryErr := executor.ExecuteStream(ctx, auth, execReq, execOpts)
+					if retryStream != nil {
+						logging.MergeResponseHeaders(ctx, retryStream.Headers)
+					}
 					retryErr = markUpstreamExecutionAttemptFromContext(ctx, retryErr)
 					retryStream, retryErr = validateStreamResult(retryStream, retryErr)
 					retryErr = markUpstreamExecutionAttemptFromContext(ctx, retryErr)
