@@ -70,14 +70,14 @@ func TestQuotaAwareSelectorWindowRankingAndUnknownFallback(t *testing.T) {
 			a.Quota.Signals = quotaTestSignals(provider, now, 95, 0)
 			pick("b") // A short-window bottleneck is equally important.
 			a.Quota.ObservedAt = now.Add(-DefaultQuotaMaxAge)
-			pick("a") // Stale means unknown, not empty: configured fill-first applies.
+			pick("b") // Stale means neutral; known headroom remains in the weighted pool.
 			a.Quota.ObservedAt = now.Add(time.Second)
-			pick("a") // Future observations are untrustworthy.
+			pick("b") // Future observations are untrustworthy and therefore neutral.
 			a.Quota.ObservedAt = time.Time{}
-			pick("a")
+			pick("b")
 			a.Quota.ObservedAt = now
 			a.Quota.Signals = nil
-			pick("a")
+			pick("b")
 			// Unsupported providers never acquire a synthetic quota from headers.
 			a.Provider, b.Provider = "gemini", "gemini"
 			pick("a")
@@ -419,9 +419,17 @@ func TestQuotaAwareStaleSnapshotIsNeutral(t *testing.T) {
 		t.Fatalf("stale snapshot was treated as a routing advantage: %+v", view)
 	}
 	fallback := &FillFirstSelector{}
-	selector := &QuotaAwareSelector{Fallback: fallback, nowFunc: func() time.Time { return now }}
+	selector := &QuotaAwareSelector{Fallback: fallback, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0 }}
 	got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{stale, fresh})
 	if errPick != nil || got == nil || got.ID != "fresh" {
-		t.Fatalf("mixed stale/fresh selection = %v, %v; want configured fallback's highest usable tier", got, errPick)
+		t.Fatalf("mixed stale/fresh selection = %v, %v; want known headroom account", got, errPick)
+	}
+	// A cool known account must beat an unknown one; stale data is not a
+	// synthetic best score.
+	cool := quotaTestAuth("cool", "claude", now, quotaTestSignals("claude", now, 0, 0))
+	selector.randFunc = func() float64 { return 0 }
+	got, errPick = selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{stale, cool})
+	if errPick != nil || got == nil || got.ID != "cool" {
+		t.Fatalf("unknown account outranked cool known account = %v, %v", got, errPick)
 	}
 }

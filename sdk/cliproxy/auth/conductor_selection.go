@@ -660,7 +660,10 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 		priorityAuths = highestPriorityAuths(allAuths)
 	}
 
-	if sessionAffinity {
+	if sessionAffinity || aware != nil {
+		// Quota-aware selection needs every usable tier so it can move to a
+		// lower tier when all credentials in the higher tier are pacing-hot.
+		// Session affinity has the same across-tier membership contract.
 		selectorAuths = allAuths
 	} else {
 		selectorAuths = highestPriorityAuths(allAuths)

@@ -355,8 +355,9 @@ type RoutingConfig struct {
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// QuotaAware uses fresh passive Claude and Codex quota windows for
-	// new bindings and safe same-provider failover: earliest shared-window reset first,
-	// then tightest-window headroom. It never rewrites the requested provider or model.
+	// new bindings and safe same-provider failover: priority first, then paced shared-window
+	// headroom. A lower tier is used only when every higher-tier credential is pacing-hot.
+	// It never rewrites the requested provider or model.
 	// Unknown data uses Strategy unchanged.
 	QuotaAware bool `yaml:"quota-aware,omitempty" json:"quota-aware,omitempty"`
 

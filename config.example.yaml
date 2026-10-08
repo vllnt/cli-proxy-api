@@ -142,8 +142,8 @@ routing:
   # Opt-in passive quota routing for new sessions. Uses Claude 5h/7d and Codex primary/secondary;
   # other providers retain strategy/cooldown behavior.
   # Usable sessions stay pinned. Explicit exhaustion with a future reset permits failover.
-  # New sessions favor the earliest valid future reset across shared windows, then the
-  # most headroom in the tightest window. A rejected weekly window still blocks an account;
+  # New sessions prefer paced headroom within the highest priority tier. A lower tier is
+  # used only when every higher-tier credential is pacing-hot. A rejected weekly window still blocks an account;
   # recovery requires all ordinary cooldowns and exhausted windows to clear.
   # Ties or any unknown/stale data use the configured strategy within the highest usable priority.
   # No provider/model rewriting: a Claude request stays Claude and a Codex request stays Codex.

@@ -60,17 +60,17 @@ func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, o
 		return nil, errAvailable
 	}
 	views := make([]quotaRoutingView, len(available))
+	knownCount := 0
 	for i, candidate := range available {
 		views[i] = quotaViewForAuth(candidate, now, s.maxAge())
 		if !views[i].known {
-			log.WithFields(log.Fields{
-				"auth":     candidate.ID,
-				"priority": authPriority(candidate),
-				"score":    0,
-				"hot":      false,
-				"reason":   "unknown",
-			}).Debug("quota-aware candidate")
-			return fallback.Pick(ctx, provider, model, opts, available)
+			// Missing or stale telemetry is neutral: it must not look like free
+			// capacity, and it must not discard known headroom from other accounts.
+			// If every candidate is unknown, preserve the configured strategy exactly.
+			views[i].score = 1
+			views[i].reason = "unknown"
+		} else {
+			knownCount++
 		}
 		log.WithFields(log.Fields{
 			"auth":     candidate.ID,
@@ -79,6 +79,9 @@ func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, o
 			"hot":      views[i].hot,
 			"reason":   views[i].reason,
 		}).Debug("quota-aware candidate")
+	}
+	if knownCount == 0 {
+		return fallback.Pick(ctx, provider, model, opts, available)
 	}
 	beforeTier := available
 	beforeTierViews := views

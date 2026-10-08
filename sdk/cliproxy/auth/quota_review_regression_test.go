@@ -78,6 +78,44 @@ func TestQuotaReviewPluginDelegateUsesApprovedMembership(t *testing.T) {
 	}
 }
 
+func TestQuotaReviewManagerPassesHotHigherTierToQuotaSelector(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	high := quotaTestAuth("high-hot", "claude", now, quotaTestSignals("claude", now, 95, 20))
+	high.Attributes = map[string]string{"priority": "2"}
+	low := quotaTestAuth("low-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	low.Attributes = map[string]string{"priority": "1"}
+	selector := &QuotaAwareSelector{
+		Fallback: &FillFirstSelector{},
+		nowFunc:  func() time.Time { return now },
+		randFunc: func() float64 { return 0 },
+	}
+	manager := NewManager(nil, selector, nil)
+	priorityAuths, selectorAuths, errAvailable := manager.availableAuthsForSelector(selector, []*Auth{high, low}, "claude", "", now)
+	if errAvailable != nil {
+		t.Fatalf("availableAuthsForSelector() error = %v", errAvailable)
+	}
+	if len(priorityAuths) != 1 || priorityAuths[0].ID != high.ID {
+		t.Fatalf("plugin priority candidates = %v, want only %s", authIDs(priorityAuths), high.ID)
+	}
+	if len(selectorAuths) != 2 {
+		t.Fatalf("quota selector candidates = %v, want both priority tiers", authIDs(selectorAuths))
+	}
+	got, errPick := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, selectorAuths)
+	if errPick != nil || got == nil || got.ID != low.ID {
+		t.Fatalf("quota-aware pick = %v, %v; want lower cool tier %s", got, errPick, low.ID)
+	}
+}
+
+func authIDs(auths []*Auth) []string {
+	ids := make([]string, 0, len(auths))
+	for _, auth := range auths {
+		if auth != nil {
+			ids = append(ids, auth.ID)
+		}
+	}
+	return ids
+}
+
 func TestQuotaReviewXAITransportPreferenceDoesNotMigrateBinding(t *testing.T) {
 	sticky := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &FillFirstSelector{}})
 	t.Cleanup(sticky.Stop)
