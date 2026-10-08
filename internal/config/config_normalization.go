@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginstore"
+	log "github.com/sirupsen/logrus"
 )
 
 // NormalizePluginsConfig applies default plugin configuration values.
@@ -30,6 +31,20 @@ func (cfg *Config) NormalizePluginsConfig() {
 	cfg.Plugins.StoreAuth = sdkpluginstore.NormalizeAuthConfigs(cfg.Plugins.StoreAuth)
 	if cfg.Plugins.Configs == nil {
 		cfg.Plugins.Configs = map[string]PluginInstanceConfig{}
+	}
+}
+
+// maxRetryTimingSeconds caps max-retry-duration and overload-cooldown-seconds at one day.
+const maxRetryTimingSeconds = 86400
+
+// clampRetryTiming caps max-retry-duration and overload-cooldown-seconds at one day, so a
+// typo cannot park a credential or hold a request for longer, or overflow a time.Duration.
+func (cfg *Config) clampRetryTiming() {
+	for name, value := range map[string]*int{"max-retry-duration": &cfg.MaxRetryDuration, "overload-cooldown-seconds": &cfg.OverloadCooldownSeconds} {
+		if *value > maxRetryTimingSeconds {
+			log.WithField("value", *value).Warnf("%s too large; clamping to %d", name, maxRetryTimingSeconds)
+			*value = maxRetryTimingSeconds
+		}
 	}
 }
 
