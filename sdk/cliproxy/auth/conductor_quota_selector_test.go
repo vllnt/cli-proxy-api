@@ -162,6 +162,7 @@ func TestManagerQuotaAwareMixedProviderAndRetryExclusions(t *testing.T) {
 	// An unsupported provider has neutral telemetry; known headroom remains
 	// eligible and is preferred over that neutral candidate.
 	unknown := quotaTestAuth("quota-0", "gemini", now, nil)
+	unknown.Attributes = map[string]string{"priority": "-1"}
 	registry.GetGlobalRegistry().RegisterClient(unknown.ID, "gemini", []*registry.ModelInfo{{ID: model}})
 	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(unknown.ID) })
 	if _, errRegister := manager.Register(ctx, unknown); errRegister != nil {
@@ -171,8 +172,8 @@ func TestManagerQuotaAwareMixedProviderAndRetryExclusions(t *testing.T) {
 	// New route state makes round-robin's first ID deterministic.
 	manager.SetSelector(&QuotaAwareSelector{Fallback: &FillFirstSelector{}})
 	got, _, provider, errPick = manager.pickNextMixed(ctx, []string{"claude", "codex", "gemini"}, model, cliproxyexecutor.Options{}, nil)
-	if errPick != nil || got == nil || got.ID != "quota-b" || provider != "codex" {
-		t.Fatalf("neutral mixed candidate = %v, %s, %v", got, provider, errPick)
+	if errPick != nil || got == nil || got.ID != "quota-0" || provider != "gemini" {
+		t.Fatalf("neutral mixed fallback = %v, %s, %v", got, provider, errPick)
 	}
 }
 
