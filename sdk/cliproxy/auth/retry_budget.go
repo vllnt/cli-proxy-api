@@ -43,6 +43,6 @@ func retryBudgetExhausted(ctx context.Context, wait time.Duration, next string, 
 	if now.Add(wait).Before(budget.deadline) {
 		return false
 	}
-	logEntryWithRequestID(ctx).Debugf("retry budget spent after %s and %d %ss; not starting another %s", now.Sub(budget.start).Round(time.Millisecond), done, next, next)
+	logEntryWithRequestID(ctx).Debugf("retry budget spent: elapsed=%s tried=%d, not starting another %s", now.Sub(budget.start).Round(time.Millisecond), done, next)
 	return true
 }
