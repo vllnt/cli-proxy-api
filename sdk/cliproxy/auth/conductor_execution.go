@@ -152,7 +152,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 		}
 		lastErr = errExec
 		wait, shouldRetry := m.shouldRetryAfterErrorWithAttempted(ctx, opts, errExec, attempt, normalized, retryModel, maxWait, -1, defaultRequestRetry, roundAttempted)
-		if !shouldRetry || retryBudgetExhausted(ctx, wait) {
+		if !shouldRetry || retryBudgetExhausted(ctx, wait, "round", attempt+1) {
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
@@ -213,7 +213,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 		}
 		lastErr = errExec
 		wait, shouldRetry := m.shouldRetryAfterErrorWithAttempted(ctx, opts, errExec, attempt, normalized, retryModel, maxWait, -1, defaultRequestRetry, roundAttempted)
-		if !shouldRetry || retryBudgetExhausted(ctx, wait) {
+		if !shouldRetry || retryBudgetExhausted(ctx, wait, "round", attempt+1) {
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
@@ -286,7 +286,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		}
 		lastErr = errStream
 		wait, shouldRetry := m.shouldRetryAfterErrorWithAttempted(ctx, opts, errStream, attempt, normalized, retryModel, maxWait, homeRetryLimit, defaultRequestRetry, roundAttempted)
-		if !shouldRetry || retryBudgetExhausted(ctx, wait) {
+		if !shouldRetry || retryBudgetExhausted(ctx, wait, "round", attempt+1) {
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait, maxWait); errWait != nil {
@@ -502,7 +502,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	var lastErr error
 	var upstreamErr error
 	for {
-		if (maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials) || (lastErr != nil && retryBudgetExhausted(ctx, 0)) {
+		if (maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials) || (lastErr != nil && retryBudgetExhausted(ctx, 0, "credential", len(attempted))) {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
 			}
@@ -714,7 +714,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	var lastErr error
 	var upstreamErr error
 	for {
-		if (maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials) || (lastErr != nil && retryBudgetExhausted(ctx, 0)) {
+		if (maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials) || (lastErr != nil && retryBudgetExhausted(ctx, 0, "credential", len(attempted))) {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
 			}
@@ -947,7 +947,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		if lastErr != nil && retryBudgetExhausted(ctx, 0) {
+		if lastErr != nil && retryBudgetExhausted(ctx, 0, "credential", len(attempted)) {
 			return nil, preferredExecutionAttemptError(lastErr, upstreamErr)
 		}
 		pickOpts := opts

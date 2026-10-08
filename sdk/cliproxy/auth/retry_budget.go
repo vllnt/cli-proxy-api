@@ -8,7 +8,12 @@ import (
 // retryBudgetNow is the clock for max-retry-duration; tests replace it.
 var retryBudgetNow = time.Now
 
-type retryBudgetDeadlineKey struct{}
+type retryBudgetKey struct{}
+
+type retryBudget struct {
+	start    time.Time
+	deadline time.Time
+}
 
 // withRetryBudget records when max-retry-duration runs out for this request. It is a plain
 // timestamp rather than a context deadline: the retry loops stop starting new credential
@@ -19,16 +24,25 @@ func (m *Manager) withRetryBudget(ctx context.Context) context.Context {
 	if ctx == nil || cfg == nil || cfg.MaxRetryDuration <= 0 || m.HomeEnabled() {
 		return ctx
 	}
-	deadline := retryBudgetNow().Add(time.Duration(cfg.MaxRetryDuration) * time.Second)
-	return context.WithValue(ctx, retryBudgetDeadlineKey{}, deadline)
+	start := retryBudgetNow()
+	return context.WithValue(ctx, retryBudgetKey{}, retryBudget{start: start, deadline: start.Add(time.Duration(cfg.MaxRetryDuration) * time.Second)})
 }
 
-// retryBudgetExhausted reports whether an attempt that would start after waiting wait begins
-// past the request's max-retry-duration.
-func retryBudgetExhausted(ctx context.Context, wait time.Duration) bool {
+// retryBudgetExhausted reports whether the next round or credential, starting after waiting
+// wait, would begin past the request's max-retry-duration. done counts the rounds or
+// credentials already tried and is only logged.
+func retryBudgetExhausted(ctx context.Context, wait time.Duration, next string, done int) bool {
 	if ctx == nil {
 		return false
 	}
-	deadline, ok := ctx.Value(retryBudgetDeadlineKey{}).(time.Time)
-	return ok && !retryBudgetNow().Add(wait).Before(deadline)
+	budget, ok := ctx.Value(retryBudgetKey{}).(retryBudget)
+	if !ok {
+		return false
+	}
+	now := retryBudgetNow()
+	if now.Add(wait).Before(budget.deadline) {
+		return false
+	}
+	logEntryWithRequestID(ctx).Debugf("retry budget spent after %s and %d %ss; not starting another %s", now.Sub(budget.start).Round(time.Millisecond), done, next, next)
+	return true
 }
