@@ -58,7 +58,7 @@ func TestQuotaAwareSelectorWindowRankingAndUnknownFallback(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			a := quotaTestAuth("a", provider, now, quotaTestSignals(provider, now, 0, 95))
 			b := quotaTestAuth("b", provider, now, quotaTestSignals(provider, now, 40, 40))
-			s := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }}
+			s := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0.999 }}
 			pick := func(want string) {
 				t.Helper()
 				got, errPick := s.Pick(context.Background(), provider, "model", cliproxyexecutor.Options{}, []*Auth{b, a})
@@ -82,6 +82,19 @@ func TestQuotaAwareSelectorWindowRankingAndUnknownFallback(t *testing.T) {
 			a.Provider, b.Provider = "gemini", "gemini"
 			pick("a")
 		})
+	}
+}
+
+func TestQuotaAwareSelectorDoesNotPreferMostUsedAccountForSoonerReset(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	hot := quotaTestAuth("hot", "claude", now, quotaTestSignals("claude", now, 80, 20))
+	cool := quotaTestAuth("cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	hot.Quota.Signals["Anthropic-Ratelimit-Unified-5h-Reset"] = strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	cool.Quota.Signals["Anthropic-Ratelimit-Unified-5h-Reset"] = strconv.FormatInt(now.Add(4*time.Hour).Unix(), 10)
+	selector := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0.5 }}
+	got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{hot, cool})
+	if errPick != nil || got == nil || got.ID != "cool" {
+		t.Fatalf("pick = %v, %v; want cool account despite later reset", got, errPick)
 	}
 }
 
@@ -148,6 +161,20 @@ func TestQuotaViewValidationAndResetHandling(t *testing.T) {
 	}
 }
 
+func TestClaudeAggregateRejectionWithOverageMarkerNeedsHealthySharedWindow(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	future := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	unsafe := quotaTestAuth("unsafe", "claude", now, map[string]string{
+		"Anthropic-Ratelimit-Unified-Status":               "rejected",
+		"Anthropic-Ratelimit-Unified-Reset":                future,
+		"Anthropic-Ratelimit-Unified-7d_oi-Status":         "rejected",
+		"Anthropic-Ratelimit-Unified-Representative-Claim": "seven_day_overage_included",
+	})
+	if view := quotaViewForAuth(unsafe, now, DefaultQuotaMaxAge); view.known || !view.blockedUntil.Equal(now.Add(time.Hour)) {
+		t.Fatalf("overage marker without healthy shared window bypassed rejection: %+v", view)
+	}
+}
+
 func TestCodexQuotaViewRequiresCredentialWindows(t *testing.T) {
 	now := time.Unix(1800000000, 0)
 	future := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
@@ -173,7 +200,7 @@ func TestQuotaAwareSelectorResetTiePriorityWeightsAndTransport(t *testing.T) {
 	a := quotaTestAuth("a", "codex", now, quotaTestSignals("codex", now, 50, 10))
 	b := quotaTestAuth("b", "codex", now, quotaTestSignals("codex", now, 50, 10))
 	b.Quota.Signals["X-Codex-Primary-Reset-At"] = strconv.FormatInt(now.Add(time.Minute).Unix(), 10)
-	s := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }}
+	s := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0.999 }}
 	pick := func(ctx context.Context, want string) {
 		t.Helper()
 		got, errPick := s.Pick(ctx, "codex", "model", cliproxyexecutor.Options{}, []*Auth{b, a})
@@ -194,6 +221,12 @@ func TestQuotaAwareSelectorResetTiePriorityWeightsAndTransport(t *testing.T) {
 	b.Attributes = map[string]string{AttributeWeight: "3"}
 	b.Quota.Signals = a.Quota.Clone().Signals
 	counts := map[string]int{}
+	randomIndex := 0
+	s.randFunc = func() float64 {
+		value := (float64(randomIndex%4) + 0.5) / 4
+		randomIndex++
+		return value
+	}
 	for i := 0; i < 40; i++ {
 		got, errPick := s.Pick(context.Background(), "codex", "model", cliproxyexecutor.Options{}, []*Auth{b, a})
 		if errPick != nil {
@@ -201,8 +234,8 @@ func TestQuotaAwareSelectorResetTiePriorityWeightsAndTransport(t *testing.T) {
 		}
 		counts[got.ID]++
 	}
-	if counts["a"] != 10 || counts["b"] != 30 {
-		t.Fatalf("weighted ties = %v, want 1:3", counts)
+	if counts["a"] < 8 || counts["a"] > 15 || counts["b"] < 25 || counts["b"] > 32 {
+		t.Fatalf("weighted ties = %v, want approximately 1:3", counts)
 	}
 }
 
@@ -242,7 +275,15 @@ func TestQuotaAwareAffinityPreservesSessionsAndFailsOver(t *testing.T) {
 			t.Run(provider+"/"+mode, func(t *testing.T) {
 				a := quotaTestAuth("a", provider, now, quotaTestSignals(provider, now, 10, 10))
 				b := quotaTestAuth("b", provider, now, quotaTestSignals(provider, now, 60, 60))
-				s := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &FillFirstSelector{}})
+				randomIndex := 0
+				s := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &FillFirstSelector{}, randFunc: func() float64 {
+					value := 0.0
+					if randomIndex > 0 {
+						value = 0.999
+					}
+					randomIndex++
+					return value
+				}})
 				t.Cleanup(s.Stop)
 				opts := func(session string) cliproxyexecutor.Options {
 					options := cliproxyexecutor.Options{Metadata: map[string]any{}}
@@ -287,7 +328,7 @@ func TestQuotaAwareAffinityWeightedZeroRebindAndConcurrentPicks(t *testing.T) {
 	now := time.Now()
 	a := quotaTestAuth("a", "codex", now, quotaTestSignals("codex", now, 0, 0))
 	b := quotaTestAuth("b", "codex", now, quotaTestSignals("codex", now, 10, 10))
-	s := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &WeightedRoundRobinSelector{}})
+	s := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &WeightedRoundRobinSelector{}, randFunc: func() float64 { return 0 }})
 	t.Cleanup(s.Stop)
 	opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": []string{"stable"}}}
 	got, errPick := s.Pick(context.Background(), "codex", "model", opts, []*Auth{a, b})
@@ -311,4 +352,76 @@ func TestQuotaAwareAffinityWeightedZeroRebindAndConcurrentPicks(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+func TestQuotaAwarePriorityUsesLowerTierOnlyWhenHigherTierIsHot(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	highHot := quotaTestAuth("high-hot", "claude", now, quotaTestSignals("claude", now, 95, 20))
+	highHot.Attributes = map[string]string{"priority": "2"}
+	lowCool := quotaTestAuth("low-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	lowCool.Attributes = map[string]string{"priority": "1"}
+	selector := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0 }}
+	got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{highHot, lowCool})
+	if errPick != nil || got == nil || got.ID != lowCool.ID {
+		t.Fatalf("hot high-priority pick = %v, %v; want lower cool tier", got, errPick)
+	}
+
+	highCool := quotaTestAuth("high-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	highCool.Attributes = map[string]string{"priority": "2"}
+	selected, selectedViews := pacedPriorityTier([]*Auth{highHot, highCool, lowCool}, []quotaRoutingView{
+		quotaViewForAuth(highHot, now, DefaultQuotaMaxAge),
+		quotaViewForAuth(highCool, now, DefaultQuotaMaxAge),
+		quotaViewForAuth(lowCool, now, DefaultQuotaMaxAge),
+	})
+	if len(selected) != 2 || selected[0].ID != highHot.ID || selected[1].ID != highCool.ID || len(selectedViews) != 2 {
+		t.Fatalf("higher tier with paced headroom was not kept intact: auths=%v views=%v", selected, selectedViews)
+	}
+}
+
+func TestQuotaAwareCodexCreditsPlanAndResetMetadata(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	future := strconv.FormatInt(now.Add(2*time.Hour).Unix(), 10)
+	credits := quotaTestAuth("credits", "codex", now, map[string]string{
+		"X-Codex-Primary-Used-Percent":   "100",
+		"X-Codex-Primary-Reset-At":       future,
+		"X-Codex-Secondary-Used-Percent": "100",
+		"X-Codex-Secondary-Reset-At":     future,
+		"X-Codex-Limit-Reached":          "true",
+		"X-Codex-Credits-Has-Credits":    "true",
+		"X-Codex-Plan-Type":              "enterprise",
+		"X-Codex-Primary-Resets-Left":    "3",
+		"X-Codex-Primary-Reset-Expiry":   strconv.FormatInt(now.Add(time.Hour).Unix(), 10),
+	})
+	view := quotaViewForAuth(credits, now, DefaultQuotaMaxAge)
+	if !view.known || !view.credits || view.planTypeRank != 4 || !view.blockedUntil.IsZero() || view.resetsLeft != 3 || !view.resetExpiry.Equal(now.Add(time.Hour)) {
+		t.Fatalf("credit overflow/reset metadata view = %+v", view)
+	}
+	quota := quotaTestAuth("quota", "codex", now, map[string]string{
+		"X-Codex-Primary-Used-Percent":   "50",
+		"X-Codex-Primary-Reset-At":       strconv.FormatInt(now.Add(7*24*time.Hour).Unix(), 10),
+		"X-Codex-Secondary-Used-Percent": "50",
+		"X-Codex-Secondary-Reset-At":     strconv.FormatInt(now.Add(7*24*time.Hour).Unix(), 10),
+		"X-Codex-Plan-Type":              "plus",
+	})
+	selector := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0.5 }}
+	got, errPick := selector.Pick(context.Background(), "codex", "model", cliproxyexecutor.Options{}, []*Auth{credits, quota})
+	if errPick != nil || got == nil || got.ID != credits.ID {
+		t.Fatalf("credit overflow pick = %v, %v; want credits account", got, errPick)
+	}
+}
+
+func TestQuotaAwareStaleSnapshotIsNeutral(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	stale := quotaTestAuth("stale", "claude", now.Add(-DefaultQuotaMaxAge-time.Second), quotaTestSignals("claude", now, 0, 0))
+	fresh := quotaTestAuth("fresh", "claude", now, quotaTestSignals("claude", now, 80, 80))
+	view := quotaViewForAuth(stale, now, DefaultQuotaMaxAge)
+	if view.known || !view.blockedUntil.IsZero() {
+		t.Fatalf("stale snapshot was treated as a routing advantage: %+v", view)
+	}
+	fallback := &FillFirstSelector{}
+	selector := &QuotaAwareSelector{Fallback: fallback, nowFunc: func() time.Time { return now }}
+	got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{stale, fresh})
+	if errPick != nil || got == nil || got.ID != "fresh" {
+		t.Fatalf("mixed stale/fresh selection = %v, %v; want configured fallback's highest usable tier", got, errPick)
+	}
 }

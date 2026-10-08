@@ -23,7 +23,7 @@ func quotaRevisionResets(auth *Auth, short, weekly time.Time) {
 	}
 }
 
-func TestQuotaRevisionResetFirstPreservesHealthyBinding(t *testing.T) {
+func TestQuotaRevisionHeadroomFirstPreservesHealthyBinding(t *testing.T) {
 	// No expiry boundary relies on the real clock: the affinity cache only needs
 	// these snapshots to be fresh during this synchronous sequence.
 	now := time.Now().Truncate(time.Second)
@@ -33,7 +33,7 @@ func TestQuotaRevisionResetFirstPreservesHealthyBinding(t *testing.T) {
 			b := quotaTestAuth("b", provider, now, quotaTestSignals(provider, now, 20, 20)) // 80% remaining.
 			quotaRevisionResets(a, now.Add(5*time.Minute), now.Add(4*time.Hour))
 			quotaRevisionResets(b, now.Add(2*time.Hour), now.Add(3*time.Hour))
-			aware := &QuotaAwareSelector{Fallback: &FillFirstSelector{}}
+			aware := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, randFunc: func() float64 { return 0.999 }}
 			sticky := NewSessionAffinitySelector(aware)
 			t.Cleanup(sticky.Stop)
 			options := func(id string) cliproxyexecutor.Options {
@@ -42,8 +42,8 @@ func TestQuotaRevisionResetFirstPreservesHealthyBinding(t *testing.T) {
 			if got, errPick := sticky.Pick(context.Background(), provider, "model", options("existing"), []*Auth{b}); errPick != nil || got == nil || got.ID != "b" {
 				t.Fatalf("initial binding = %v, %v", got, errPick)
 			}
-			if got, errPick := sticky.Pick(context.Background(), provider, "model", options("new"), []*Auth{b, a}); errPick != nil || got == nil || got.ID != "a" {
-				t.Errorf("new session = %v, %v; want earlier-reset account a despite less headroom", got, errPick)
+			if got, errPick := sticky.Pick(context.Background(), provider, "model", options("new"), []*Auth{b, a}); errPick != nil || got == nil || got.ID != "b" {
+				t.Errorf("new session = %v, %v; want paced-headroom account b", got, errPick)
 			}
 			if got, errPick := sticky.Pick(context.Background(), provider, "model", options("existing"), []*Auth{a, b}); errPick != nil || got == nil || got.ID != "b" {
 				t.Errorf("healthy existing binding = %v, %v; want b", got, errPick)
@@ -64,9 +64,9 @@ func TestQuotaRevisionCrossWindowResetOrder(t *testing.T) {
 			want                  string
 			rejectedWeekly        bool
 		}{
-			{"short reset outranks headroom", 5 * time.Minute, 4 * time.Hour, 2 * time.Hour, 3 * time.Hour, 60, 60, 20, 20, "a", false},
-			{"weekly reset outranks short reset", 3 * time.Hour, 5 * time.Minute, 2 * time.Hour, 4 * time.Hour, 60, 60, 20, 20, "a", false},
-			{"equal earliest reset uses tightest headroom", 5 * time.Minute, 4 * time.Hour, 5 * time.Minute, 3 * time.Hour, 0, 90, 50, 50, "b", false},
+			{"headroom beats short reset when paced", 5 * time.Minute, 4 * time.Hour, 2 * time.Hour, 3 * time.Hour, 60, 60, 20, 20, "b", false},
+			{"headroom beats weekly reset when paced", 3 * time.Hour, 5 * time.Minute, 2 * time.Hour, 4 * time.Hour, 60, 60, 20, 20, "b", false},
+			{"tightest headroom is paced last", 5 * time.Minute, 4 * time.Hour, 5 * time.Minute, 3 * time.Hour, 0, 90, 50, 50, "b", false},
 			{"short reset cannot bypass rejected weekly", 5 * time.Minute, 4 * time.Hour, 2 * time.Hour, 3 * time.Hour, 60, 100, 20, 20, "b", true},
 		} {
 			t.Run(provider+"/"+test.name, func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestQuotaRevisionCrossWindowResetOrder(t *testing.T) {
 						a.Quota.Signals["X-Codex-Limit-Reached"] = "true"
 					}
 				}
-				s := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }}
+				s := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0.999 }}
 				got, errPick := s.Pick(context.Background(), provider, "model", cliproxyexecutor.Options{}, []*Auth{b, a})
 				if errPick != nil || got == nil || got.ID != test.want {
 					t.Fatalf("pick = %v, %v; want %s", got, errPick, test.want)
@@ -249,7 +249,7 @@ func TestQuotaAwareAffinitySeparatesModels(t *testing.T) {
 	now := time.Now()
 	a := quotaTestAuth("model-a", "codex", now, quotaTestSignals("codex", now, 10, 10))
 	b := quotaTestAuth("model-b", "codex", now, quotaTestSignals("codex", now, 10, 10))
-	selector := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &FillFirstSelector{}})
+	selector := NewSessionAffinitySelector(&QuotaAwareSelector{Fallback: &FillFirstSelector{}, randFunc: func() float64 { return 0 }})
 	t.Cleanup(selector.Stop)
 	opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": []string{"shared-session"}}}
 	if got, errPick := selector.Pick(context.Background(), "codex", "model-one", opts, []*Auth{a, b}); errPick != nil || got == nil || got.ID != a.ID {

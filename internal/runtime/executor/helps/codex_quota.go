@@ -95,7 +95,9 @@ func ParseCodexQuotaEventHeaders(payload []byte) http.Header {
 	if credits.Exists() && credits.IsObject() {
 		hasQuotaData = setCodexQuotaScalarHeader(headers, "X-Codex-Credits-Has-Credits", credits, "has_credits", "hasCredits") || hasQuotaData
 		hasQuotaData = setCodexQuotaScalarHeader(headers, "X-Codex-Credits-Unlimited", credits, "unlimited") || hasQuotaData
-		hasQuotaData = setCodexQuotaScalarHeader(headers, "X-Codex-Credits-Balance", credits, "balance") || hasQuotaData
+		hasQuotaData = setCodexQuotaScalarHeader(headers, "X-Codex-Credits-Balance", credits, "balance", "available_credits", "availableCredits") || hasQuotaData
+		hasQuotaData = setCodexQuotaScalarHeader(headers, "X-Codex-Credits-Available", credits, "available_credits", "availableCredits") || hasQuotaData
+		hasQuotaData = setCodexQuotaScalarHeader(headers, "X-Codex-Credits-Percent-Remaining", credits, "pct_remaining", "percent_remaining", "percentRemaining") || hasQuotaData
 	}
 
 	if !hasQuotaData {
@@ -202,6 +204,15 @@ func addCodexQuotaRateLimitHeaders(headers http.Header, prefix string, rateInfo 
 		if hasResetAt {
 			setCodexQuotaScalarHeaderFromResult(headers, windowPrefix+"Reset-At", window, "reset_at", "resetAt")
 		}
+		for _, field := range []struct {
+			header string
+			paths  []string
+		}{
+			{windowPrefix + "Resets-Left", []string{"resets_left", "resetsLeft", "resets_remaining", "resetsRemaining"}},
+			{windowPrefix + "Reset-Expiry", []string{"reset_expiry", "resetExpiry", "expires_at", "expiresAt", "expiry"}},
+		} {
+			setCodexQuotaScalarHeaderFromResult(headers, field.header, window, field.paths...)
+		}
 		changed = true
 	}
 	return changed
@@ -248,6 +259,10 @@ func isCodexQuotaHeaderName(name string) bool {
 		"-window-minutes",
 		"-reset-after-seconds",
 		"-reset-at",
+		"-resets-left",
+		"-reset-expiry",
+		"-expires-at",
+		"-expiry",
 		"-over-secondary-limit-percent",
 	} {
 		if strings.Contains(lower, marker) {

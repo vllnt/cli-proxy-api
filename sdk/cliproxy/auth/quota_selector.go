@@ -3,11 +3,13 @@ package auth
 import (
 	"context"
 	"math"
+	mathrand "math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	log "github.com/sirupsen/logrus"
 )
 
 // DefaultQuotaMaxAge bounds how long a passive quota snapshot guides routing.
@@ -22,6 +24,7 @@ type QuotaAwareSelector struct {
 	MaxAge          time.Duration
 	nowFunc         func() time.Time
 	defaultFallback RoundRobinSelector
+	randFunc        func() float64
 }
 
 func (s *QuotaAwareSelector) now() time.Time {
@@ -46,10 +49,8 @@ func (s *QuotaAwareSelector) fallback() Selector {
 }
 
 // Pick preserves eligibility, priority, weight exclusion and Codex transport
-// preferences before ranking by the earliest valid future reset across shared
-// windows, then most headroom in the tightest observed window. If any
-// candidate has unknown data, delegate the whole usable pool rather than assume
-// that account has either full or empty quota.
+// preferences before pacing healthy candidates by real headroom. Unknown data
+// delegates the whole usable pool to the configured strategy.
 func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	now := s.now()
 	fallback := s.fallback()
@@ -58,23 +59,164 @@ func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, o
 	if errAvailable != nil {
 		return nil, errAvailable
 	}
-	available = preferWebsocketAuths(ctx, provider, highestPriorityAuths(available))
-
-	best := quotaRoutingView{}
-	var ranked []*Auth
-	for _, candidate := range available {
-		view := quotaViewForAuth(candidate, now, s.maxAge())
-		if !view.known {
+	views := make([]quotaRoutingView, len(available))
+	for i, candidate := range available {
+		views[i] = quotaViewForAuth(candidate, now, s.maxAge())
+		if !views[i].known {
+			log.WithFields(log.Fields{
+				"auth":     candidate.ID,
+				"priority": authPriority(candidate),
+				"score":    0,
+				"hot":      false,
+				"reason":   "unknown",
+			}).Debug("quota-aware candidate")
 			return fallback.Pick(ctx, provider, model, opts, available)
 		}
-		if len(ranked) == 0 || view.reset.Before(best.reset) || (view.reset.Equal(best.reset) && view.remaining > best.remaining) {
-			best = view
-			ranked = []*Auth{candidate}
-		} else if view.remaining == best.remaining && view.reset.Equal(best.reset) {
-			ranked = append(ranked, candidate)
+		log.WithFields(log.Fields{
+			"auth":     candidate.ID,
+			"priority": authPriority(candidate),
+			"score":    views[i].score,
+			"hot":      views[i].hot,
+			"reason":   views[i].reason,
+		}).Debug("quota-aware candidate")
+	}
+	beforeTier := available
+	beforeTierViews := views
+	available, views = pacedPriorityTier(available, views)
+	selectedIDs := make(map[string]struct{}, len(available))
+	for _, candidate := range available {
+		selectedIDs[candidate.ID] = struct{}{}
+	}
+	for i, candidate := range beforeTier {
+		if _, selected := selectedIDs[candidate.ID]; selected {
+			continue
+		}
+		reason := beforeTierViews[i].reason
+		if reason == "" {
+			reason = "lower-priority"
+		}
+		log.WithFields(log.Fields{
+			"auth":     candidate.ID,
+			"priority": authPriority(candidate),
+			"score":    beforeTierViews[i].score,
+			"hot":      beforeTierViews[i].hot,
+			"reason":   reason,
+		}).Debug("quota-aware candidate skipped")
+	}
+	preferred := preferWebsocketAuths(ctx, provider, available)
+	if len(preferred) != len(available) {
+		byID := make(map[string]quotaRoutingView, len(views))
+		for i, candidate := range available {
+			byID[candidate.ID] = views[i]
+		}
+		filteredViews := make([]quotaRoutingView, 0, len(preferred))
+		for _, candidate := range preferred {
+			filteredViews = append(filteredViews, byID[candidate.ID])
+		}
+		views = filteredViews
+	}
+	available = preferred
+	selected, okSelected := s.pickWeighted(available, views, fallback)
+	if !okSelected {
+		return fallback.Pick(ctx, provider, model, opts, available)
+	}
+	selectedView := quotaRoutingView{}
+	for i, candidate := range available {
+		if candidate.ID == selected.ID {
+			selectedView = views[i]
+			break
 		}
 	}
-	return fallback.Pick(ctx, provider, model, opts, ranked)
+	log.WithFields(log.Fields{
+		"auth":   selected.ID,
+		"score":  selectedView.score,
+		"hot":    selectedView.hot,
+		"reason": selectedView.reason,
+	}).Debug("quota-aware selected credential")
+	return selected, nil
+}
+
+func pacedPriorityTier(auths []*Auth, views []quotaRoutingView) ([]*Auth, []quotaRoutingView) {
+	if len(auths) == 0 || len(auths) != len(views) {
+		return auths, views
+	}
+	maxPriority := authPriority(auths[0])
+	minPriority := maxPriority
+	for _, auth := range auths[1:] {
+		priority := authPriority(auth)
+		if priority > maxPriority {
+			maxPriority = priority
+		}
+		if priority < minPriority {
+			minPriority = priority
+		}
+	}
+	chosenPriority := maxPriority
+	for priority := maxPriority; priority >= minPriority; priority-- {
+		for i, auth := range auths {
+			if authPriority(auth) == priority && !views[i].hot {
+				chosenPriority = priority
+				return filterPriorityTier(auths, views, chosenPriority)
+			}
+		}
+	}
+	return filterPriorityTier(auths, views, chosenPriority)
+}
+
+func filterPriorityTier(auths []*Auth, views []quotaRoutingView, priority int) ([]*Auth, []quotaRoutingView) {
+	selectedAuths := make([]*Auth, 0, len(auths))
+	selectedViews := make([]quotaRoutingView, 0, len(views))
+	for i, auth := range auths {
+		if authPriority(auth) == priority {
+			selectedAuths = append(selectedAuths, auth)
+			selectedViews = append(selectedViews, views[i])
+		}
+	}
+	return selectedAuths, selectedViews
+}
+
+func (s *QuotaAwareSelector) randomFloat64() float64 {
+	if s != nil && s.randFunc != nil {
+		value := s.randFunc()
+		if value >= 0 && value < 1 {
+			return value
+		}
+	}
+	return mathrand.Float64()
+}
+
+func (s *QuotaAwareSelector) pickWeighted(auths []*Auth, views []quotaRoutingView, fallback Selector) (*Auth, bool) {
+	if len(auths) == 0 || len(auths) != len(views) {
+		return nil, false
+	}
+	weighted := make([]float64, len(auths))
+	var total float64
+	_, configuredWeights := fallback.(*WeightedRoundRobinSelector)
+	for i, view := range views {
+		weight := view.score
+		if weight <= 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+			weight = 0.01
+		}
+		if configuredWeights {
+			weight *= float64(authWeight(auths[i]))
+		}
+		// Plan type only breaks near-equal quota scores; it cannot override a
+		// materially hotter account or a higher priority tier.
+		weight *= 1 + float64(view.planTypeRank)*0.02
+		weighted[i] = weight
+		total += weight
+	}
+	if total <= 0 || math.IsNaN(total) || math.IsInf(total, 0) {
+		return nil, false
+	}
+	target := s.randomFloat64() * total
+	for i, weight := range weighted {
+		if target < weight {
+			return auths[i], true
+		}
+		target -= weight
+	}
+	return auths[len(auths)-1], true
 }
 
 // usable excludes only fresh, explicitly exhausted windows with a future
@@ -163,27 +305,144 @@ type quotaRoutingView struct {
 	remaining    float64
 	reset        time.Time
 	blockedUntil time.Time
+	score        float64
+	hot          bool
+	reason       string
+	planTypeRank int
+	paceFactor   float64
+	credits      bool
+	resetsLeft   int64
+	resetExpiry  time.Time
 }
 
-// Ranking uses the earliest observed replenishment and the minimum headroom
-// independently. Exhaustion instead waits for the latest rejected-window reset,
-// so a short-window reset never makes a rejected weekly window usable.
-func (v *quotaRoutingView) addWindow(remaining float64, valid bool, reset, now time.Time, exhausted bool) {
+// addWindow turns raw remaining quota into a paced score. A score near 1 means
+// the account is consuming at its window pace; below 1 is hot and above 1 is
+// cool. Reset urgency is deliberately a modest bonus so "use it or lose it"
+// capacity wins only when headroom is otherwise comparable.
+func (v *quotaRoutingView) addWindow(remaining float64, valid bool, reset, now time.Time, exhausted bool, duration time.Duration) {
 	if !reset.After(now) {
 		return
 	}
 	if exhausted && reset.After(v.blockedUntil) {
 		v.blockedUntil = reset
 	}
-	if valid {
-		if !v.known || remaining < v.remaining {
-			v.remaining = remaining
-		}
-		if !v.known || reset.Before(v.reset) {
-			v.reset = reset
-		}
-		v.known = true
+	if !valid {
+		return
 	}
+	remaining = math.Max(0, math.Min(1, remaining))
+	elapsed := 0.0
+	if duration > 0 {
+		elapsed = math.Max(0, math.Min(1, now.Sub(reset.Add(-duration)).Seconds()/duration.Seconds()))
+	}
+	remainingTime := math.Max(1-elapsed, 0.05)
+	paced := remaining / remainingTime
+	urgency := 1 + 0.2*elapsed
+	score := remaining * paced * urgency
+	if !v.known || score < v.score {
+		v.score = score
+	}
+	if !v.known || paced < v.paceFactor {
+		v.paceFactor = paced
+	}
+	if !v.known || remaining < v.remaining {
+		v.remaining = remaining
+	}
+	if !v.known || reset.Before(v.reset) {
+		v.reset = reset
+	}
+	v.known = true
+	if paced < 1 && !v.hot {
+		v.hot = true
+		v.reason = "hot"
+	} else if v.reason == "" {
+		v.reason = "cool"
+	}
+}
+
+func (v *quotaRoutingView) addCredits(score float64, reset, now time.Time) {
+	if !v.known || score <= 0 {
+		return
+	}
+	v.credits = true
+	if v.score < score {
+		v.score = score
+	}
+	if !reset.IsZero() && (v.reset.IsZero() || reset.Before(v.reset)) {
+		v.reset = reset
+	}
+	if v.hot && score >= 0.5 {
+		v.reason = "credits-overflow"
+		v.hot = false
+	}
+}
+
+func (v *quotaRoutingView) addResetMetadata(left int64, expiry, now time.Time) {
+	if left >= 0 {
+		v.resetsLeft = left
+	}
+	if expiry.After(now) {
+		v.resetExpiry = expiry
+		if !v.reset.IsZero() && expiry.Before(v.reset) {
+			v.reset = expiry
+		}
+	}
+	if left > 0 && v.known {
+		v.score *= 1 + math.Min(float64(left), 5)*0.03
+	}
+}
+
+func codexPlanTypeRank(raw string) int {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "enterprise":
+		return 4
+	case "team":
+		return 3
+	case "pro":
+		return 2
+	case "plus":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func parseQuotaInt(raw string) (int64, bool) {
+	value, errParse := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	return value, errParse == nil && value >= 0
+}
+
+func quotaDuration(provider, window string, signals map[string]string) time.Duration {
+	if provider == "claude" {
+		if window == "5h" {
+			return 5 * time.Hour
+		}
+		if window == "7d" {
+			return 7 * 24 * time.Hour
+		}
+	}
+	if provider == "codex" {
+		if minutes, ok := parseQuotaInt(signals["x-codex-"+window+"-window-minutes"]); ok && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+		// Current Codex usage events identify the primary window as 7d and
+		// secondary as 5h; the header remains authoritative when present.
+		if window == "primary" {
+			return 7 * 24 * time.Hour
+		}
+		if window == "secondary" {
+			return 5 * time.Hour
+		}
+	}
+	return 0
+}
+
+func quotaExpiry(signals map[string]string, prefix string) time.Time {
+	for _, key := range []string{prefix + "reset-expiry", prefix + "expires-at", prefix + "expiry"} {
+		if value := quotaReset(signals[key]); !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }
 
 // Only shared subscription windows are comparable. Model-specific Claude
@@ -216,21 +475,32 @@ func quotaViewForAuth(auth *Auth, now time.Time, maxAge time.Duration) quotaRout
 			if exhausted {
 				sharedWindowRejected = true
 			}
-			view.addWindow(1-used, valid, reset, now, exhausted)
+			if duration := quotaDuration("claude", window, signals); duration == 0 || now.Sub(auth.Quota.ObservedAt) < duration {
+				view.addWindow(1-used, valid, reset, now, exhausted, duration)
+			}
 		}
 		// Older Claude responses may expose only the aggregate status/reset.
-		// Treat that as a shared-window rejection unless the provider explicitly
-		// identifies an overage/Fable-only rejection.
-		overageOnly := strings.EqualFold(signals["anthropic-ratelimit-unified-7d_oi-status"], "rejected") ||
-			strings.EqualFold(signals["anthropic-ratelimit-unified-overage-status"], "rejected") ||
-			strings.TrimSpace(signals["anthropic-ratelimit-unified-overage-disabled-reason"]) != "" ||
-			strings.Contains(strings.ToLower(signals["anthropic-ratelimit-unified-representative-claim"]), "overage")
+		// Ignore an aggregate rejection only when the existing Claude classifier
+		// can prove that the rejection is overage/Fable-only and a shared window
+		// is explicitly healthy.
+		overageOnly := claudeOverageOnly(signals)
 		if !sharedWindowRejected && strings.EqualFold(signals["anthropic-ratelimit-unified-status"], "rejected") && !overageOnly {
-			view.addWindow(0, false, quotaReset(signals["anthropic-ratelimit-unified-reset"]), now, true)
+			view.addWindow(0, false, quotaReset(signals["anthropic-ratelimit-unified-reset"]), now, true, 0)
 		}
 	case "codex":
 		explicitlyAllowed := strings.EqualFold(signals["x-codex-allowed"], "true")
 		explicitlyRejected := strings.EqualFold(signals["x-codex-allowed"], "false") || strings.EqualFold(signals["x-codex-limit-reached"], "true")
+		creditsAvailable, creditScore := codexCredits(signals)
+		planType := signals["x-codex-plan-type"]
+		if planType == "" && auth.Attributes != nil {
+			planType = auth.Attributes["plan_type"]
+		}
+		if planType == "" && auth.Metadata != nil {
+			if rawPlan, okPlan := auth.Metadata["plan_type"].(string); okPlan {
+				planType = rawPlan
+			}
+		}
+		view.planTypeRank = codexPlanTypeRank(planType)
 		for _, window := range []string{"primary", "secondary"} {
 			prefix := "x-codex-" + window + "-"
 			used, valid := quotaNumber(signals[prefix+"used-percent"], 100)
@@ -246,13 +516,67 @@ func quotaViewForAuth(auth *Auth, now time.Time, maxAge time.Duration) quotaRout
 					reset = q.ObservedAt.Add(time.Duration(seconds) * time.Second)
 				}
 			}
-			// Allowed/credits may permit continued use at 100%. Only an explicit
-			// rejection blocks; a percentage alone is a ranking hint. A rejected
-			// window remains actionable even when its usage percentage is omitted.
-			view.addWindow(1-used/100, valid, reset, now, explicitlyRejected && !explicitlyAllowed)
+			duration := quotaDuration("codex", window, signals)
+			if duration == 0 || now.Sub(q.ObservedAt) < duration {
+				view.addWindow(1-used/100, valid, reset, now, explicitlyRejected && !explicitlyAllowed && !creditsAvailable, duration)
+			}
+			if left, ok := parseQuotaInt(signals[prefix+"resets-left"]); ok {
+				view.addResetMetadata(left, quotaExpiry(signals, prefix), now)
+			}
+		}
+		if creditsAvailable {
+			view.addCredits(creditScore, view.reset, now)
 		}
 	}
 	return view
+}
+
+func claudeOverageOnly(signals map[string]string) bool {
+	status5h := strings.ToLower(strings.TrimSpace(signals["anthropic-ratelimit-unified-5h-status"]))
+	status7d := strings.ToLower(strings.TrimSpace(signals["anthropic-ratelimit-unified-7d-status"]))
+	if status5h == "rejected" || status7d == "rejected" {
+		return false
+	}
+	status7dOI := strings.ToLower(strings.TrimSpace(signals["anthropic-ratelimit-unified-7d_oi-status"]))
+	overageRejected := status7dOI == "rejected" ||
+		strings.EqualFold(signals["anthropic-ratelimit-unified-overage-status"], "rejected") ||
+		strings.TrimSpace(signals["anthropic-ratelimit-unified-overage-disabled-reason"]) != "" ||
+		strings.Contains(strings.ToLower(signals["anthropic-ratelimit-unified-representative-claim"]), "overage")
+	if !overageRejected {
+		return false
+	}
+	isAllowed := func(status string) bool { return status == "allowed" || status == "allowed_warning" }
+	if isAllowed(status5h) && isAllowed(status7d) {
+		return true
+	}
+	// Anthropic sometimes omits one status while reporting healthy utilization.
+	if isAllowed(status7d) && status5h == "" {
+		if utilization, ok := quotaNumber(signals["anthropic-ratelimit-unified-5h-utilization"], 1); ok && utilization < 1 {
+			return true
+		}
+	}
+	if isAllowed(status5h) && status7d == "" {
+		if utilization, ok := quotaNumber(signals["anthropic-ratelimit-unified-7d-utilization"], 1); ok && utilization < 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func codexCredits(signals map[string]string) (bool, float64) {
+	if strings.EqualFold(signals["x-codex-credits-unlimited"], "true") {
+		return true, 1
+	}
+	if balance, errParse := strconv.ParseFloat(signals["x-codex-credits-balance"], 64); errParse == nil && !math.IsNaN(balance) && !math.IsInf(balance, 0) {
+		if balance > 0 {
+			return true, 1
+		}
+		return false, 0
+	}
+	if strings.EqualFold(signals["x-codex-credits-has-credits"], "true") {
+		return true, 1
+	}
+	return false, 0
 }
 
 func quotaNumber(raw string, max float64) (float64, bool) {
