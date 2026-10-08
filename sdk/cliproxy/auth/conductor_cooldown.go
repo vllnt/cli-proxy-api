@@ -947,7 +947,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								auth.NextRetryAfter = authNext
 							}
 						case 408, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526:
-							state.NextRetryAfter = recoverableFailureRetryAfterWithHint(now, result.RetryAfter, disableCooling)
+							state.NextRetryAfter = recoverableFailureRetryAfterWithHint(now, m.transientRetryHint(result.Error, result.RetryAfter), disableCooling)
 							state.Unavailable = !state.NextRetryAfter.IsZero()
 						default:
 							state.NextRetryAfter = recoverableFailureRetryAfter(now, disableCooling)
@@ -977,7 +977,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				if result.Error != nil && result.Error.Code == ErrorCodeForceCooldown {
 					disableCooling = false
 				}
-				applyAuthFailureState(auth, result.Error, result.RetryAfter, now, disableCooling)
+				applyAuthFailureState(auth, result.Error, m.transientRetryHint(result.Error, result.RetryAfter), now, disableCooling)
 			}
 		}
 
@@ -1500,8 +1500,35 @@ func resultErrorFromError(err error) *Error {
 		if resultErr.Code == "" || resultErr.Code == transientTransportErrorCode {
 			resultErr.Code = transientTransportErrorCode
 		}
+	case isOverloadError(err):
+		if resultErr.Code == "" {
+			resultErr.Code = ErrorCodeUpstreamOverloaded
+		}
 	}
 	return resultErr
+}
+
+// isOverloadError reports whether an executor classified err as upstream load shedding.
+func isOverloadError(err error) bool {
+	type overloadProvider interface {
+		IsOverload() bool
+	}
+	var op overloadProvider
+	return errors.As(err, &op) && op != nil && op.IsOverload()
+}
+
+// transientRetryHint returns the cooldown hint for a transient failure. Upstream advice wins;
+// otherwise a 5xx overload rejection uses overload-cooldown-seconds when it is configured.
+func (m *Manager) transientRetryHint(resultErr *Error, retryAfter *time.Duration) *time.Duration {
+	if retryAfter != nil || resultErr == nil || resultErr.Code != ErrorCodeUpstreamOverloaded || resultErr.StatusCode() < http.StatusInternalServerError {
+		return retryAfter
+	}
+	cfg := m.runtimeConfigSnapshot()
+	if cfg == nil || cfg.OverloadCooldownSeconds <= 0 {
+		return nil
+	}
+	cooldown := time.Duration(cfg.OverloadCooldownSeconds) * time.Second
+	return &cooldown
 }
 
 // shouldSkipCredentialCooldown reports failures that must not mark auth/model cooling.

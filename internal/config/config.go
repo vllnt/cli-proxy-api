@@ -79,6 +79,11 @@ type Config struct {
 	// 0 keeps the legacy default cooldown. Negative values disable these cooldowns.
 	TransientErrorCooldownSeconds int `yaml:"transient-error-cooldown-seconds" json:"transient-error-cooldown-seconds"`
 
+	// OverloadCooldownSeconds controls the per-credential, per-model cooldown for upstream overload
+	// rejections such as Codex server_is_overloaded. Load shedding says nothing about the credential,
+	// so a short cooldown keeps it in rotation. 0 or below keeps the transient error cooldown.
+	OverloadCooldownSeconds int `yaml:"overload-cooldown-seconds" json:"overload-cooldown-seconds"`
+
 	// AuthAutoRefreshWorkers overrides the size of the core auth auto-refresh and manual refresh-all worker pool.
 	// When <= 0, the default worker count is used.
 	AuthAutoRefreshWorkers int `yaml:"auth-auto-refresh-workers" json:"auth-auto-refresh-workers"`
@@ -95,6 +100,10 @@ type Config struct {
 	// forbids positive cooldown waits; it does not disable same-round credential
 	// failover or immediate additional rounds allowed by RequestRetry.
 	MaxRetryInterval int `yaml:"max-retry-interval" json:"max-retry-interval"`
+	// MaxRetryDuration bounds, in seconds, how long one execution may keep starting new
+	// credential attempts after a failure. An attempt that is already running is never
+	// cut short. 0 or below means no limit.
+	MaxRetryDuration int `yaml:"max-retry-duration" json:"max-retry-duration"`
 
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`

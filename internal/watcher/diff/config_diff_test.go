@@ -740,3 +740,9 @@ func TestTrimStrings(t *testing.T) {
 		t.Fatalf("unexpected trimmed strings: %v", out)
 	}
 }
+
+func TestBuildConfigChangeDetails_OverloadFailoverKeys(t *testing.T) {
+	details := BuildConfigChangeDetails(&config.Config{}, &config.Config{OverloadCooldownSeconds: 5, MaxRetryDuration: 90})
+	expectContains(t, details, "overload-cooldown-seconds: 0 -> 5")
+	expectContains(t, details, "max-retry-duration: 0 -> 90")
+}

@@ -176,6 +176,15 @@ routing:
     # Retry rounds that need no wait remain controlled by request-retry.
     max-retry-interval: 30
 
+    # Maximum total time in seconds one execution may keep starting new credential attempts
+    # after a failure, across credentials and retry rounds. An attempt already running, or a
+    # stream already delivering, is never cut short. A round that waits for a cooldown may start
+    # up to its jitter (at most 2s) late, and each streaming bootstrap retry
+    # (requests.streaming.bootstrap-retries) starts a fresh budget. Ignored when CLIProxyAPIHome
+    # is enabled. 0 or below means no limit.
+    # Default: 0
+    max-retry-duration: 0
+
   cooldown:
     # When true, disable auth/model cooldown scheduling globally (prevents blackout windows after failure states).
     # A credential/provider disable-cooling value, when present, overrides this global value.
@@ -188,6 +197,15 @@ routing:
     # Cooldown duration in seconds for transient upstream errors (408/500/502/503/504/520-526).
     # Set to 0 to keep the legacy 60-second cooldown; set to -1 to disable transient error cooldowns.
     transient-error-cooldown-seconds: 0
+
+    # Cooldown in seconds for upstream overload rejections (Codex server_is_overloaded, or a server
+    # error that asks the caller to retry). Like other transient errors it applies to the credential
+    # and model that were shed; load shedding says nothing about the credential, so a short value
+    # (e.g. 5) puts it back in rotation sooner. Upstream retry advice still wins, and
+    # transient-error-cooldown-seconds: -1 still disables these cooldowns. No effect when
+    # CLIProxyAPIHome is enabled. 0 or below keeps transient-error-cooldown-seconds.
+    # Default: 0
+    overload-cooldown-seconds: 0
 
 # Shared request/response behavior.
 requests:
@@ -905,6 +923,8 @@ oauth:
       # wait. Neither is made worse by this option - with it off the same stalled line stalls the
       # conductor instead, which waits on the same context - but a client-side request timeout, not
       # proxy_read_timeout, is what bounds them.
+      # Pair it with routing.cooldown.overload-cooldown-seconds so a shed request does not take the
+      # credential out of rotation for a minute.
       # Default: false
       stream-bootstrap-buffering: false
       # Optional maximum duration to hold back uncommitted response headers during bootstrap buffering.

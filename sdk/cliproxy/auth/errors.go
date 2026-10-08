@@ -30,6 +30,10 @@ const transientTransportErrorCode = ErrorCodeTransientTransport
 // ErrorCodeForceCooldown marks failures that must enforce credential cooldown.
 const ErrorCodeForceCooldown = "force_cooldown"
 
+// ErrorCodeUpstreamOverloaded marks upstream load shedding, which says nothing about the
+// credential and therefore uses the overload cooldown instead of the transient one.
+const ErrorCodeUpstreamOverloaded = "upstream_overloaded"
+
 // Error describes an authentication related failure in a provider agnostic format.
 type Error struct {
 	// Code is a short machine readable identifier.

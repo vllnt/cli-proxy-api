@@ -55,6 +55,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.TransientErrorCooldownSeconds != newCfg.TransientErrorCooldownSeconds {
 		changes = append(changes, fmt.Sprintf("transient-error-cooldown-seconds: %d -> %d", oldCfg.TransientErrorCooldownSeconds, newCfg.TransientErrorCooldownSeconds))
 	}
+	if oldCfg.OverloadCooldownSeconds != newCfg.OverloadCooldownSeconds {
+		changes = append(changes, fmt.Sprintf("overload-cooldown-seconds: %d -> %d", oldCfg.OverloadCooldownSeconds, newCfg.OverloadCooldownSeconds))
+	}
 	if oldCfg.DisableClaudeCloakMode != newCfg.DisableClaudeCloakMode {
 		changes = append(changes, fmt.Sprintf("disable-claude-cloak-mode: %t -> %t", oldCfg.DisableClaudeCloakMode, newCfg.DisableClaudeCloakMode))
 	}
@@ -84,6 +87,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	}
 	if oldCfg.MaxRetryInterval != newCfg.MaxRetryInterval {
 		changes = append(changes, fmt.Sprintf("max-retry-interval: %d -> %d", oldCfg.MaxRetryInterval, newCfg.MaxRetryInterval))
+	}
+	if oldCfg.MaxRetryDuration != newCfg.MaxRetryDuration {
+		changes = append(changes, fmt.Sprintf("max-retry-duration: %d -> %d", oldCfg.MaxRetryDuration, newCfg.MaxRetryDuration))
 	}
 	if oldCfg.ProxyURL != newCfg.ProxyURL {
 		changes = append(changes, fmt.Sprintf("proxy-url: %s -> %s", formatProxyURL(oldCfg.ProxyURL), formatProxyURL(newCfg.ProxyURL)))
