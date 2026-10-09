@@ -39,12 +39,29 @@ func TestConfiguredQuotaRoutingPrefersHeadroomAndPreservesAffinity(t *testing.T)
 			b := a.Clone()
 			b.ID = "b"
 			b.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] = "0.2"
-			opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": []string{"stable"}}}
-			got, errPick := selector.Pick(context.Background(), "claude", "model", opts, []*coreauth.Auth{a, b})
-			if errPick != nil || got == nil || got.ID != "b" {
+			var stableSession string
+			var got *coreauth.Auth
+			var errPick error
+			for attempt := 0; attempt < 64; attempt++ {
+				candidateSession := fmt.Sprintf("stable-%d", attempt)
+				opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": []string{candidateSession}}}
+				got, errPick = selector.Pick(context.Background(), "claude", "model", opts, []*coreauth.Auth{a, b})
+				if errPick != nil {
+					t.Fatalf("new session %s failed: %v", candidateSession, errPick)
+				}
+				if got != nil && got.ID == "b" {
+					stableSession = candidateSession
+					break
+				}
+			}
+			if stableSession == "" {
+				t.Fatal("quota-aware selection did not choose the higher-headroom account in 64 independent sessions")
+			}
+			if got == nil || got.ID != "b" {
 				t.Fatalf("new session picked %v, %v; want higher-headroom account b", got, errPick)
 			}
 			a.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] = "0.0"
+			opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": []string{stableSession}}}
 			got, errPick = selector.Pick(context.Background(), "claude", "model", opts, []*coreauth.Auth{a, b})
 			if errPick != nil || got == nil || got.ID != "b" {
 				t.Fatalf("active session picked %v, %v; want pinned account b", got, errPick)

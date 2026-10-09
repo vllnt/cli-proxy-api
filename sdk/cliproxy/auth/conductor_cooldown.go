@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -1056,6 +1057,7 @@ func (m *Manager) RecordHTTPResult(ctx context.Context, authID, provider, model 
 		Model:    model,
 		Success:  (status >= http.StatusOK && status < http.StatusMultipleChoices) || status == http.StatusSwitchingProtocols,
 	}
+	result.RetryAfter = retryAfterFromHTTPHeaders(status, headers, time.Now())
 	if !result.Success {
 		result.Error = &Error{
 			Code:       "upstream_http_error",
@@ -1067,6 +1069,31 @@ func (m *Manager) RecordHTTPResult(ctx context.Context, authID, provider, model 
 		}
 	}
 	m.MarkResult(ctx, result)
+}
+
+// retryAfterFromHTTPHeaders converts the standard HTTP Retry-After header into
+// the duration consumed by MarkResult. Raw HTTP routes do not have an executor
+// error object from which to recover this hint.
+func retryAfterFromHTTPHeaders(status int, headers http.Header, now time.Time) *time.Duration {
+	if status != http.StatusTooManyRequests || len(headers) == 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(headers.Get("Retry-After"))
+	if raw == "" {
+		return nil
+	}
+	if seconds, errParse := strconv.ParseInt(raw, 10, 64); errParse == nil && seconds >= 0 && seconds <= 9223372036 {
+		delay := time.Duration(seconds) * time.Second
+		return &delay
+	}
+	if deadline, errParse := http.ParseTime(raw); errParse == nil {
+		delay := deadline.Sub(now)
+		if delay < 0 {
+			delay = 0
+		}
+		return &delay
+	}
+	return nil
 }
 
 func (m *Manager) updateSessionAffinity(result Result) {

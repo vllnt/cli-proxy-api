@@ -231,3 +231,21 @@ func TestQuotaAwareSelectionLeavesHomeDispatchAuthoritative(t *testing.T) {
 		t.Fatalf("quota-aware local selector was called in Home mode: %d", fallback.calls)
 	}
 }
+
+func TestManagerRecordHTTPResultPreservesRetryAfter(t *testing.T) {
+	auth := &Auth{ID: "external-retry", Provider: "codex", Status: StatusActive}
+	manager := NewManager(nil, &QuotaAwareSelector{Fallback: &FillFirstSelector{}}, nil)
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	manager.RecordHTTPResult(context.Background(), auth.ID, auth.Provider, "gpt-5", http.StatusTooManyRequests, http.Header{
+		"Retry-After": {"30"},
+	})
+	got, ok := manager.GetByID(auth.ID)
+	if !ok || got == nil {
+		t.Fatalf("Get(%s) = %v, %v", auth.ID, got, ok)
+	}
+	if remaining := time.Until(got.NextRetryAfter); remaining < 25*time.Second || remaining > 31*time.Second {
+		t.Fatalf("NextRetryAfter remaining = %v, want approximately 30s", remaining)
+	}
+}
