@@ -522,15 +522,11 @@ func quotaViewForAuth(auth *Auth, now time.Time, maxAge time.Duration) quotaRout
 	}
 	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
 	case "claude":
-		sharedWindowRejected := false
 		for _, window := range []string{"5h", "7d"} {
 			prefix := "anthropic-ratelimit-unified-" + window + "-"
 			used, valid := quotaNumber(signals[prefix+"utilization"], 1)
 			reset := quotaReset(signals[prefix+"reset"])
 			exhausted := strings.EqualFold(signals[prefix+"status"], "rejected")
-			if exhausted {
-				sharedWindowRejected = true
-			}
 			if duration := quotaDuration("claude", window, signals); duration == 0 || now.Sub(auth.Quota.ObservedAt) < duration {
 				view.addWindow(1-used, valid, reset, now, exhausted, duration)
 			}
@@ -542,8 +538,7 @@ func quotaViewForAuth(auth *Auth, now time.Time, maxAge time.Duration) quotaRout
 		// reset is missing, retain a usable aggregate reset as the conservative
 		// credential-wide recovery deadline.
 		overageOnly := claudeOverageOnly(signals)
-		if strings.EqualFold(signals["anthropic-ratelimit-unified-status"], "rejected") && !overageOnly &&
-			(!sharedWindowRejected || view.blockedUntil.IsZero()) {
+		if strings.EqualFold(signals["anthropic-ratelimit-unified-status"], "rejected") && !overageOnly {
 			view.addWindow(0, false, quotaReset(signals["anthropic-ratelimit-unified-reset"]), now, true, 0)
 		}
 	case "codex":
