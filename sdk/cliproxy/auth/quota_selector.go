@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	mathrand "math/rand/v2"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -165,19 +166,20 @@ func pacedPriorityTier(auths []*Auth, views []quotaRoutingView) ([]*Auth, []quot
 	if len(auths) == 0 || len(auths) != len(views) {
 		return auths, views
 	}
-	maxPriority := authPriority(auths[0])
-	minPriority := maxPriority
-	for _, auth := range auths[1:] {
+	priorities := make([]int, 0, len(auths))
+	seen := make(map[int]struct{}, len(auths))
+	for _, auth := range auths {
 		priority := authPriority(auth)
-		if priority > maxPriority {
-			maxPriority = priority
+		if _, ok := seen[priority]; ok {
+			continue
 		}
-		if priority < minPriority {
-			minPriority = priority
-		}
+		seen[priority] = struct{}{}
+		priorities = append(priorities, priority)
 	}
-	chosenPriority := maxPriority
-	for priority := maxPriority; priority >= minPriority; priority-- {
+	sort.Ints(priorities)
+	chosenPriority := priorities[len(priorities)-1]
+	for index := len(priorities) - 1; index >= 0; index-- {
+		priority := priorities[index]
 		for i, auth := range auths {
 			if authPriority(auth) == priority && !views[i].hot {
 				chosenPriority = priority

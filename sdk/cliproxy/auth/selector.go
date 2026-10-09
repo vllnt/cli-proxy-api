@@ -1130,7 +1130,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 
 	// Quota-aware cold bindings serialize the get-choose-bind window so
 	// concurrent turns do not defeat pacing. Disabled mode keeps the legacy
-	// lock-free cache and logging behavior byte-for-byte.
+	// lock-free cache and the legacy selection behavior.
 	if quotaAware == nil {
 		if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 			if auth := findAvailable(cachedAuthID); auth != nil {

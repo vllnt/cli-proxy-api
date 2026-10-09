@@ -145,7 +145,8 @@ routing:
   # New sessions prefer paced headroom within the highest priority tier. A lower tier is
   # used only when every higher-tier credential is pacing-hot. A rejected weekly window still blocks an account;
   # recovery requires all ordinary cooldowns and exhausted windows to clear.
-  # Ties or any unknown/stale data use the configured strategy within the highest usable priority.
+  # Unknown/stale telemetry is neutral. If every candidate is unknown, the configured strategy is used;
+  # otherwise weighted headroom selection is used within the highest paced priority tier.
   # No provider/model rewriting: a Claude request stays Claude and a Codex request stays Codex.
   # No polling, response caching, or cross-model additional/overage quota assumptions.
   # When Home control-plane mode is enabled, Home remains the selection owner; this local

@@ -446,3 +446,31 @@ func TestQuotaAwareStaleSnapshotIsNeutral(t *testing.T) {
 		t.Fatalf("unknown account outranked hot known account = %v, %v", got, errPick)
 	}
 }
+
+func TestQuotaAwarePrioritySelectionHandlesSparseLargePriorities(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	hot := quotaTestAuth("large-hot", "claude", now, quotaTestSignals("claude", now, 95, 95))
+	hot.Attributes = map[string]string{"priority": "1000000000"}
+	cool := quotaTestAuth("small-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
+	cool.Attributes = map[string]string{"priority": "-1000000000"}
+	selector := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0 }}
+	got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{hot, cool})
+	if errPick != nil || got == nil || got.ID != cool.ID {
+		t.Fatalf("sparse priority pick = %v, %v; want %s", got, errPick, cool.ID)
+	}
+}
+
+func TestClaudeAggregateResetExtendsAnotherRejectedWindow(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	signals := map[string]string{
+		"Anthropic-Ratelimit-Unified-5h-Status": "rejected",
+		"Anthropic-Ratelimit-Unified-5h-Reset":  strconv.FormatInt(now.Add(time.Minute).Unix(), 10),
+		"Anthropic-Ratelimit-Unified-7d-Status": "rejected",
+		"Anthropic-Ratelimit-Unified-Status":    "rejected",
+		"Anthropic-Ratelimit-Unified-Reset":     strconv.FormatInt(now.Add(3*time.Hour).Unix(), 10),
+	}
+	view := quotaViewForAuth(quotaTestAuth("aggregate", "claude", now, signals), now, DefaultQuotaMaxAge)
+	if !view.blockedUntil.Equal(now.Add(3 * time.Hour)) {
+		t.Fatalf("aggregate reset did not extend rejected window: got %v", view.blockedUntil)
+	}
+}

@@ -458,7 +458,7 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 		}
 		responseBody := handleSidebandDialError(c, ctx, runtimeConfig, handshakeResponse, errDial)
 		if handshakeResponse != nil {
-			h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", session.model, handshakeResponse.StatusCode, handshakeResponse.Header)
+			h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", session.model, handshakeResponse.StatusCode, handshakeResponse.Header)
 		}
 		if selection != nil && handshakeStatus == http.StatusUnauthorized {
 			diagnosticBody := responseBody
@@ -471,7 +471,7 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 		return
 	}
 	if handshakeResponse != nil {
-		h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", session.model, handshakeResponse.StatusCode, handshakeResponse.Header)
+		h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", session.model, handshakeResponse.StatusCode, handshakeResponse.Header)
 		helps.RecordAPIWebsocketHandshake(ctx, runtimeConfig, handshakeResponse.StatusCode, callResponseHeaders(handshakeResponse.Header))
 		if handshakeResponse.Body != nil {
 			if errClose := handshakeResponse.Body.Close(); errClose != nil {
@@ -519,7 +519,7 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 		if len(helpers) == 0 {
 			return
 		}
-		h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", session.model, http.StatusSwitchingProtocols, helpers)
+		h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", session.model, http.StatusSwitchingProtocols, helpers)
 	}
 	if errRelay := relayWebsocketsObserved(downstream, upstream, observeQuota); errRelay != nil && !isNormalWebsocketClose(errRelay) {
 		helps.RecordAPIWebsocketError(ctx, runtimeConfig, "relay", errRelay)

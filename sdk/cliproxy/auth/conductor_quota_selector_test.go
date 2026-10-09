@@ -177,18 +177,23 @@ func TestManagerQuotaAwareMixedProviderAndRetryExclusions(t *testing.T) {
 	}
 }
 
-func TestManagerRecordHTTPResultObservesHeaders(t *testing.T) {
+func TestManagerRecordHTTPQuotaObservationOnlyObservesQuota(t *testing.T) {
 	now := time.Now()
 	auth := quotaTestAuth("external-codex", "codex", now.Add(-time.Second), nil)
 	manager := NewManager(nil, &QuotaAwareSelector{Fallback: &FillFirstSelector{}}, nil)
 	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
 		t.Fatal(errRegister)
 	}
+	before, ok := manager.GetByID(auth.ID)
+	if !ok || before == nil {
+		t.Fatalf("Get(%s) = %v, %v", auth.ID, before, ok)
+	}
 	headers := http.Header{}
 	for key, value := range quotaTestSignals("codex", now, 17, 23) {
 		headers.Set(key, value)
 	}
-	manager.RecordHTTPResult(context.Background(), auth.ID, auth.Provider, "gpt-5", http.StatusOK, headers)
+	headers.Set("Retry-After", "30")
+	manager.RecordHTTPQuotaObservation(context.Background(), auth.ID, auth.Provider, "gpt-5", http.StatusTooManyRequests, headers)
 	got, ok := manager.GetByID(auth.ID)
 	if !ok || got == nil {
 		t.Fatalf("Get(%s) = %v, %v", auth.ID, got, ok)
@@ -196,6 +201,31 @@ func TestManagerRecordHTTPResultObservesHeaders(t *testing.T) {
 	if got.Quota.ObservedAt.IsZero() || got.Quota.Signals["X-Codex-Primary-Used-Percent"] != "17" {
 		t.Fatalf("external response quota = %#v; want fresh primary signal", got.Quota)
 	}
+	if got.Generation != before.Generation || got.Success != before.Success || got.Failed != before.Failed || !got.NextRetryAfter.IsZero() || got.Quota.Exceeded {
+		t.Fatalf("raw HTTP observation changed cooldown/accounting state: before=%+v after=%+v", before, got)
+	}
+	for _, status := range []int{http.StatusNotFound, http.StatusServiceUnavailable} {
+		manager.RecordHTTPQuotaObservation(context.Background(), auth.ID, auth.Provider, "gpt-5", status, http.Header{"Retry-After": {"3600"}})
+	}
+	unchanged, _ := manager.GetByID(auth.ID)
+	if unchanged.Generation != before.Generation || !unchanged.NextRetryAfter.IsZero() {
+		t.Fatalf("raw HTTP non-quota responses changed state: %+v", unchanged)
+	}
+}
+
+func TestManagerRecordHTTPQuotaObservationDoesNotCreateHomeCooldownState(t *testing.T) {
+	auth := quotaTestAuth("home-codex", "codex", time.Now(), nil)
+	manager := NewManager(nil, &QuotaAwareSelector{Fallback: &FillFirstSelector{}}, nil)
+	manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	manager.RecordHTTPQuotaObservation(context.Background(), auth.ID, auth.Provider, "gpt-5", http.StatusTooManyRequests, http.Header{"X-Codex-Primary-Used-Percent": {"10"}, "X-Codex-Primary-Reset-At": {strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)}, "Retry-After": {"30"}})
+	got, _ := manager.GetByID(auth.ID)
+	if !got.Quota.Exceeded && got.NextRetryAfter.IsZero() && got.ModelStates["gpt-5"] == nil {
+		return
+	}
+	t.Fatalf("Home raw observation created cooldown state: %+v", got)
 }
 
 func TestQuotaAwareManagerWeightedStateUsesRouteNotAvailabilityAlias(t *testing.T) {
@@ -229,23 +259,5 @@ func TestQuotaAwareSelectionLeavesHomeDispatchAuthoritative(t *testing.T) {
 	}
 	if fallback.calls != 0 {
 		t.Fatalf("quota-aware local selector was called in Home mode: %d", fallback.calls)
-	}
-}
-
-func TestManagerRecordHTTPResultPreservesRetryAfter(t *testing.T) {
-	auth := &Auth{ID: "external-retry", Provider: "codex", Status: StatusActive}
-	manager := NewManager(nil, &QuotaAwareSelector{Fallback: &FillFirstSelector{}}, nil)
-	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
-		t.Fatal(errRegister)
-	}
-	manager.RecordHTTPResult(context.Background(), auth.ID, auth.Provider, "gpt-5", http.StatusTooManyRequests, http.Header{
-		"Retry-After": {"30"},
-	})
-	got, ok := manager.GetByID(auth.ID)
-	if !ok || got == nil {
-		t.Fatalf("Get(%s) = %v, %v", auth.ID, got, ok)
-	}
-	if remaining := time.Until(got.NextRetryAfter); remaining < 25*time.Second || remaining > 31*time.Second {
-		t.Fatalf("NextRetryAfter remaining = %v, want approximately 30s", remaining)
 	}
 }

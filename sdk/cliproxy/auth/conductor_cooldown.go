@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -1032,68 +1031,23 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	m.updateSessionAffinity(result)
 }
 
-// RecordHTTPResult records a response returned by an executor-owned HTTP route.
-// These routes do not pass through Execute/ExecuteStream, so the manager must
-// explicitly feed their response headers and status into the same result path.
-// The method keeps the response body out of auth state and logs.
-func (m *Manager) RecordHTTPResult(ctx context.Context, authID, provider, model string, status int, headers http.Header) {
-	if m == nil || strings.TrimSpace(authID) == "" || status <= 0 {
+// RecordHTTPQuotaObservation records passive quota headers returned by an executor-owned HTTP route.
+// Raw routes do not have the executor's provider-specific error classifier, so they must not
+// feed status codes into MarkResult: doing so would change cooldowns, counters, hooks, and
+// session state for routes that historically only exposed their response to the caller.
+func (m *Manager) RecordHTTPQuotaObservation(ctx context.Context, authID, provider, model string, status int, headers http.Header) {
+	if m == nil || strings.TrimSpace(authID) == "" || status <= 0 || len(headers) == 0 {
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	auth, okAuth := m.auths[authID]
+	if !okAuth || auth == nil {
+		return
 	}
-	if len(headers) > 0 {
-		if internallogging.GetResponseHeaders(ctx) == nil {
-			ctx = internallogging.WithResponseHeadersHolder(ctx)
-			internallogging.SetResponseHeaders(ctx, headers.Clone())
-		} else {
-			internallogging.MergeResponseHeaders(ctx, headers)
-		}
-	}
-	result := Result{
-		AuthID:   authID,
-		Provider: provider,
-		Model:    model,
-		Success:  (status >= http.StatusOK && status < http.StatusMultipleChoices) || status == http.StatusSwitchingProtocols,
-	}
-	result.RetryAfter = retryAfterFromHTTPHeaders(status, headers, time.Now())
-	if !result.Success {
-		result.Error = &Error{
-			Code:       "upstream_http_error",
-			Message:    fmt.Sprintf("upstream returned HTTP %d", status),
-			HTTPStatus: status,
-		}
-		if status == http.StatusTooManyRequests {
-			result.CredentialScope = true
-		}
-	}
-	m.MarkResult(ctx, result)
-}
-
-// retryAfterFromHTTPHeaders converts the standard HTTP Retry-After header into
-// the duration consumed by MarkResult. Raw HTTP routes do not have an executor
-// error object from which to recover this hint.
-func retryAfterFromHTTPHeaders(status int, headers http.Header, now time.Time) *time.Duration {
-	if status != http.StatusTooManyRequests || len(headers) == 0 {
-		return nil
-	}
-	raw := strings.TrimSpace(headers.Get("Retry-After"))
-	if raw == "" {
-		return nil
-	}
-	if seconds, errParse := strconv.ParseInt(raw, 10, 64); errParse == nil && seconds >= 0 && seconds <= 9223372036 {
-		delay := time.Duration(seconds) * time.Second
-		return &delay
-	}
-	if deadline, errParse := http.ParseTime(raw); errParse == nil {
-		delay := deadline.Sub(now)
-		if delay < 0 {
-			delay = 0
-		}
-		return &delay
-	}
-	return nil
+	// Keep this path observation-only. The selector reads the in-memory auth snapshot;
+	// no generation, persistence, cooldown, scheduler, hook, or affinity state changes.
+	auth.Quota.ObserveResponseHeadersForProvider(provider, headers, time.Now())
 }
 
 func (m *Manager) updateSessionAffinity(result Result) {

@@ -132,7 +132,7 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 		var responseBody []byte
 		if handshakeResponse != nil && handshakeResponse.StatusCode > 0 {
 			status = handshakeResponse.StatusCode
-			h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", selectionModel, handshakeResponse.StatusCode, handshakeResponse.Header)
+			h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", selectionModel, handshakeResponse.StatusCode, handshakeResponse.Header)
 			copyRealtimeHandshakeHeaders(c.Writer.Header(), handshakeResponse.Header)
 			helps.RecordAPIWebsocketHandshake(ctx, helpConfig, handshakeResponse.StatusCode, callResponseHeaders(handshakeResponse.Header))
 			if handshakeResponse.Body != nil {
@@ -184,7 +184,7 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 		return
 	}
 	if handshakeResponse != nil {
-		h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", selectionModel, handshakeResponse.StatusCode, handshakeResponse.Header)
+		h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", selectionModel, handshakeResponse.StatusCode, handshakeResponse.Header)
 	}
 	closeHandshakeBody(handshakeResponse, "direct websocket handshake")
 	closeUpstream := websocketCloseFunc("upstream", upstream)
@@ -241,7 +241,7 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 		if len(headers) == 0 {
 			return
 		}
-		h.authManager.RecordHTTPResult(ctx, selected.ID, "codex", selectionModel, http.StatusSwitchingProtocols, headers)
+		h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", selectionModel, http.StatusSwitchingProtocols, headers)
 	}
 	if errRelay := relayWebsocketsObserved(downstream, upstream, observeQuota); errRelay != nil && !isNormalWebsocketClose(errRelay) {
 		helps.RecordAPIWebsocketError(ctx, h.currentConfig(), "relay", errRelay)
