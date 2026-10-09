@@ -538,9 +538,12 @@ func quotaViewForAuth(auth *Auth, now time.Time, maxAge time.Duration) quotaRout
 		// Older Claude responses may expose only the aggregate status/reset.
 		// Ignore an aggregate rejection only when the existing Claude classifier
 		// can prove that the rejection is overage/Fable-only and a shared window
-		// is explicitly healthy.
+		// is explicitly healthy. If a specific shared status is rejected but its
+		// reset is missing, retain a usable aggregate reset as the conservative
+		// credential-wide recovery deadline.
 		overageOnly := claudeOverageOnly(signals)
-		if !sharedWindowRejected && strings.EqualFold(signals["anthropic-ratelimit-unified-status"], "rejected") && !overageOnly {
+		if strings.EqualFold(signals["anthropic-ratelimit-unified-status"], "rejected") && !overageOnly &&
+			(!sharedWindowRejected || view.blockedUntil.IsZero()) {
 			view.addWindow(0, false, quotaReset(signals["anthropic-ratelimit-unified-reset"]), now, true, 0)
 		}
 	case "codex":
