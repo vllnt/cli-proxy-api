@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -450,13 +451,26 @@ func TestQuotaAwareStaleSnapshotIsNeutral(t *testing.T) {
 func TestQuotaAwarePrioritySelectionHandlesSparseLargePriorities(t *testing.T) {
 	now := time.Unix(1800000000, 0)
 	hot := quotaTestAuth("large-hot", "claude", now, quotaTestSignals("claude", now, 95, 95))
-	hot.Attributes = map[string]string{"priority": "1000000000"}
+	hot.Attributes = map[string]string{"priority": strconv.FormatInt(math.MaxInt, 10)}
 	cool := quotaTestAuth("small-cool", "claude", now, quotaTestSignals("claude", now, 20, 20))
-	cool.Attributes = map[string]string{"priority": "-1000000000"}
+	cool.Attributes = map[string]string{"priority": strconv.FormatInt(math.MinInt, 10)}
 	selector := &QuotaAwareSelector{Fallback: &FillFirstSelector{}, nowFunc: func() time.Time { return now }, randFunc: func() float64 { return 0 }}
-	got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{hot, cool})
-	if errPick != nil || got == nil || got.ID != cool.ID {
-		t.Fatalf("sparse priority pick = %v, %v; want %s", got, errPick, cool.ID)
+	type pickResult struct {
+		auth *Auth
+		err  error
+	}
+	resultCh := make(chan pickResult, 1)
+	go func() {
+		got, errPick := selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{hot, cool})
+		resultCh <- pickResult{auth: got, err: errPick}
+	}()
+	select {
+	case result := <-resultCh:
+		if result.err != nil || result.auth == nil || result.auth.ID != cool.ID {
+			t.Fatalf("sparse priority pick = %v, %v; want %s", result.auth, result.err, cool.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sparse priority selection exceeded 1s; priority gaps must not drive iteration")
 	}
 }
 

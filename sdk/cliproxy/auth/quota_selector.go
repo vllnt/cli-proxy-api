@@ -17,7 +17,7 @@ import (
 const DefaultQuotaMaxAge = 5 * time.Minute
 
 // QuotaAwareSelector narrows new-session candidates using existing passive Claude
-// and Codex quota observations, then delegates ties and unknown data to the configured strategy.
+// and Codex quota observations, then delegates an all-unknown pool to the configured strategy.
 // Put session affinity outside this selector so a better score never moves a
 // usable binding. No observations or responses are cached here.
 type QuotaAwareSelector struct {
@@ -50,8 +50,8 @@ func (s *QuotaAwareSelector) fallback() Selector {
 }
 
 // Pick preserves eligibility, priority, weight exclusion and Codex transport
-// preferences before pacing healthy candidates by real headroom. Unknown data
-// delegates the whole usable pool to the configured strategy.
+// preferences before pacing healthy candidates by real headroom. An all-unknown
+// pool delegates to the configured strategy; mixed pools keep known headroom in control.
 func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	now := s.now()
 	fallback := s.fallback()
