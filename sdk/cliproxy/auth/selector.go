@@ -1147,7 +1147,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				return nil, nil
 			}
 			bind(auth.ID)
-			entry.Infof("session-affinity: cache hit but auth unavailable, reselected | auth=%s provider=%s model=%s", auth.ID, provider, model)
+			entry.Info("session-affinity: cache hit but auth unavailable, reselected")
 			return auth, nil
 		}
 	} else {
@@ -1180,7 +1180,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				return nil, nil
 			}
 			bind(auth.ID)
-			entry.Infof("session-affinity: cache hit but auth unavailable, reselected | auth=%s provider=%s model=%s", auth.ID, provider, model)
+			entry.Info("session-affinity: cache hit but auth unavailable, reselected")
 			return auth, nil
 		}
 	}
