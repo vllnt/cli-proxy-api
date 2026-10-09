@@ -61,16 +61,37 @@ func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, o
 	}
 	views := make([]quotaRoutingView, len(available))
 	knownCount := 0
+	knownScoreTotal := 0.0
 	for i, candidate := range available {
 		views[i] = quotaViewForAuth(candidate, now, s.maxAge())
+		if views[i].known {
+			knownCount++
+			knownScoreTotal += views[i].score
+		}
+	}
+	if knownCount > 0 {
+		// Unknown snapshots are neutral, not a synthetic best score. Cap the
+		// neutral weight at the unit baseline so a stale credential cannot
+		// outrank a known cool account; when all known accounts are hot, use
+		// their mean so the unknown account remains an unbiased fallback.
+		neutralScore := math.Min(1, knownScoreTotal/float64(knownCount))
+		for i := range views {
+			if views[i].known {
+				continue
+			}
+			views[i].score = neutralScore
+			views[i].reason = "unknown"
+		}
+	}
+	for i, candidate := range available {
 		if !views[i].known {
 			// Missing or stale telemetry is neutral: it must not look like free
 			// capacity, and it must not discard known headroom from other accounts.
 			// If every candidate is unknown, preserve the configured strategy exactly.
-			views[i].score = 1
-			views[i].reason = "unknown"
-		} else {
-			knownCount++
+			if knownCount == 0 {
+				views[i].score = 1
+				views[i].reason = "unknown"
+			}
 		}
 		log.WithFields(log.Fields{
 			"auth":     candidate.ID,

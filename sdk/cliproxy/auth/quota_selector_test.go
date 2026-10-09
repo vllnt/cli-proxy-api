@@ -432,4 +432,16 @@ func TestQuotaAwareStaleSnapshotIsNeutral(t *testing.T) {
 	if errPick != nil || got == nil || got.ID != "cool" {
 		t.Fatalf("unknown account outranked cool known account = %v, %v", got, errPick)
 	}
+	// When every known account is pacing-hot, stale data remains neutral rather
+	// than becoming the highest score simply because its weight defaults to one.
+	hot := quotaTestAuth("hot", "claude", now, quotaTestSignals("claude", now, 95, 95))
+	staleView := quotaViewForAuth(stale, now, DefaultQuotaMaxAge)
+	hotView := quotaViewForAuth(hot, now, DefaultQuotaMaxAge)
+	if staleView.score > hotView.score {
+		t.Fatalf("stale score = %v, hot score = %v; stale data must not be best", staleView.score, hotView.score)
+	}
+	got, errPick = selector.Pick(context.Background(), "claude", "model", cliproxyexecutor.Options{}, []*Auth{hot, stale})
+	if errPick != nil || got == nil || got.ID != "hot" {
+		t.Fatalf("unknown account outranked hot known account = %v, %v", got, errPick)
+	}
 }
