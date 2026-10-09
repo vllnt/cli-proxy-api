@@ -453,6 +453,33 @@ func authWebsocketsEnabled(auth *Auth) bool {
 
 type selectorWebsocketProviderKey struct{}
 
+func preferCodexWebsocketAuths(ctx context.Context, provider string, available []*Auth) []*Auth {
+	if len(available) == 0 {
+		return available
+	}
+	if !cliproxyexecutor.DownstreamWebsocket(ctx) {
+		return available
+	}
+	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return available
+	}
+
+	wsEnabled := make([]*Auth, 0, len(available))
+	for i := 0; i < len(available); i++ {
+		candidate := available[i]
+		if authWebsocketsEnabled(candidate) {
+			wsEnabled = append(wsEnabled, candidate)
+		}
+	}
+	if len(wsEnabled) > 0 {
+		return wsEnabled
+	}
+	return available
+}
+
+// preferWebsocketAuths applies the broader provider-aware transport preference
+// only to quota-aware selection. Legacy selectors retain the historical Codex
+// only preference through preferCodexWebsocketAuths.
 func preferWebsocketAuths(ctx context.Context, provider string, available []*Auth) []*Auth {
 	if len(available) == 0 {
 		return available
@@ -647,7 +674,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	if err != nil {
 		return nil, err
 	}
-	available = preferWebsocketAuths(ctx, provider, available)
+	available = preferCodexWebsocketAuths(ctx, provider, available)
 	key := provider + ":" + canonicalModelKey(model)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -705,7 +732,7 @@ func (s *WeightedRoundRobinSelector) Pick(ctx context.Context, provider, model s
 	if errAvailable != nil {
 		return nil, errAvailable
 	}
-	available = preferWebsocketAuths(ctx, provider, available)
+	available = preferCodexWebsocketAuths(ctx, provider, available)
 	stateModel := weightedSelectorStateModel(ctx, model)
 	key := provider + ":" + canonicalModelKey(stateModel)
 
@@ -845,7 +872,7 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	if err != nil {
 		return nil, err
 	}
-	available = preferWebsocketAuths(ctx, provider, available)
+	available = preferCodexWebsocketAuths(ctx, provider, available)
 	return available[0], nil
 }
 
@@ -1101,37 +1128,61 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		return nil
 	}
 
-	// A cache hit does not need serialization. Only a miss or an unavailable
-	// binding enters the lock, where the cache is checked again before choosing
-	// and binding so concurrent cold turns converge on one credential.
-	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
-		if auth := findAvailable(cachedAuthID); auth != nil {
+	// Quota-aware cold bindings serialize the get-choose-bind window so
+	// concurrent turns do not defeat pacing. Disabled mode keeps the legacy
+	// lock-free cache and logging behavior byte-for-byte.
+	if quotaAware == nil {
+		if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+			if auth := findAvailable(cachedAuthID); auth != nil {
+				bind(auth.ID)
+				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+				return auth, nil
+			}
+			// Cached auth not available, reselect via fallback selector for even distribution.
+			auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
+			if err != nil {
+				return nil, err
+			}
+			if auth == nil {
+				return nil, nil
+			}
 			bind(auth.ID)
-			entry.Debug("session-affinity: cache hit")
+			entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 			return auth, nil
 		}
-	}
+	} else {
+		// A cache hit does not need serialization. Only a miss or an unavailable
+		// binding enters the lock, where the cache is checked again before choosing
+		// and binding so concurrent cold turns converge on one credential.
+		if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+			if auth := findAvailable(cachedAuthID); auth != nil {
+				bind(auth.ID)
+				entry.Debug("session-affinity: cache hit")
+				return auth, nil
+			}
+		}
 
-	s.bindMu.Lock()
-	defer s.bindMu.Unlock()
+		s.bindMu.Lock()
+		defer s.bindMu.Unlock()
 
-	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
-		if auth := findAvailable(cachedAuthID); auth != nil {
+		if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+			if auth := findAvailable(cachedAuthID); auth != nil {
+				bind(auth.ID)
+				entry.Debug("session-affinity: cache hit")
+				return auth, nil
+			}
+			// Cached auth not available, reselect via fallback selector for even distribution.
+			auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
+			if err != nil {
+				return nil, err
+			}
+			if auth == nil {
+				return nil, nil
+			}
 			bind(auth.ID)
-			entry.Debug("session-affinity: cache hit")
+			entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 			return auth, nil
 		}
-		// Cached auth not available, reselect via fallback selector for even distribution.
-		auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
-		if err != nil {
-			return nil, err
-		}
-		if auth == nil {
-			return nil, nil
-		}
-		bind(auth.ID)
-		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
-		return auth, nil
 	}
 
 	if fallbackKey != "" {
