@@ -1,6 +1,7 @@
 package live
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -456,6 +457,9 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 			handshakeStatus = handshakeResponse.StatusCode
 		}
 		responseBody := handleSidebandDialError(c, ctx, runtimeConfig, handshakeResponse, errDial)
+		if handshakeResponse != nil {
+			h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", session.model, handshakeResponse.StatusCode, handshakeResponse.Header)
+		}
 		if selection != nil && handshakeStatus == http.StatusUnauthorized {
 			diagnosticBody := responseBody
 			if len(diagnosticBody) == 0 {
@@ -467,6 +471,7 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 		return
 	}
 	if handshakeResponse != nil {
+		h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", session.model, handshakeResponse.StatusCode, handshakeResponse.Header)
 		helps.RecordAPIWebsocketHandshake(ctx, runtimeConfig, handshakeResponse.StatusCode, callResponseHeaders(handshakeResponse.Header))
 		if handshakeResponse.Body != nil {
 			if errClose := handshakeResponse.Body.Close(); errClose != nil {
@@ -509,7 +514,14 @@ func (h *Handler) HandleSideband(c *gin.Context) {
 	}
 	consumeSession = true
 
-	if errRelay := relayWebsockets(downstream, upstream); errRelay != nil && !isNormalWebsocketClose(errRelay) {
+	observeQuota := func(payload []byte) {
+		helpers := helps.ParseCodexQuotaEventHeaders(payload)
+		if len(helpers) == 0 {
+			return
+		}
+		h.authManager.RecordHTTPQuotaObservation(ctx, selected.ID, "codex", session.model, http.StatusSwitchingProtocols, helpers)
+	}
+	if errRelay := relayWebsocketsObserved(downstream, upstream, observeQuota); errRelay != nil && !isNormalWebsocketClose(errRelay) {
 		helps.RecordAPIWebsocketError(ctx, runtimeConfig, "relay", errRelay)
 		log.WithError(errRelay).Debug("codex live sideband relay closed")
 	}
@@ -633,9 +645,13 @@ func websocketCloseFunc(name string, conn *websocket.Conn) func() error {
 }
 
 func relayWebsockets(downstream, upstream *websocket.Conn) error {
+	return relayWebsocketsObserved(downstream, upstream, nil)
+}
+
+func relayWebsocketsObserved(downstream, upstream *websocket.Conn, observe func([]byte)) error {
 	results := make(chan error, 2)
-	go func() { results <- copyWebsocket(upstream, downstream) }()
-	go func() { results <- copyWebsocket(downstream, upstream) }()
+	go func() { results <- copyWebsocketObserved(upstream, downstream, nil) }()
+	go func() { results <- copyWebsocketObserved(downstream, upstream, observe) }()
 
 	firstErr := <-results
 	closeCode, closeReason := websocketCloseDetails(firstErr)
@@ -649,6 +665,30 @@ func relayWebsockets(downstream, upstream *websocket.Conn) error {
 }
 
 func copyWebsocket(destination, source *websocket.Conn) error {
+	return copyWebsocketObserved(destination, source, nil)
+}
+
+const maxWebsocketObservationBytes = 1 << 20
+
+type boundedWebsocketCapture struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (c *boundedWebsocketCapture) Write(payload []byte) (int, error) {
+	originalLen := len(payload)
+	if c == nil || c.max <= c.buf.Len() {
+		return originalLen, nil
+	}
+	remaining := c.max - c.buf.Len()
+	if len(payload) > remaining {
+		payload = payload[:remaining]
+	}
+	_, _ = c.buf.Write(payload)
+	return originalLen, nil
+}
+
+func copyWebsocketObserved(destination, source *websocket.Conn, observe func([]byte)) error {
 	for {
 		messageType, reader, errReader := source.NextReader()
 		if errReader != nil {
@@ -658,13 +698,22 @@ func copyWebsocket(destination, source *websocket.Conn) error {
 		if errWriter != nil {
 			return errWriter
 		}
-		_, errCopy := io.Copy(writer, reader)
+		var capture *boundedWebsocketCapture
+		copyReader := reader
+		if observe != nil {
+			capture = &boundedWebsocketCapture{max: maxWebsocketObservationBytes}
+			copyReader = io.TeeReader(reader, capture)
+		}
+		_, errCopy := io.Copy(writer, copyReader)
 		errClose := writer.Close()
 		if errCopy != nil {
 			return errCopy
 		}
 		if errClose != nil {
 			return errClose
+		}
+		if observe != nil && capture != nil && capture.buf.Len() > 0 {
+			observe(capture.buf.Bytes())
 		}
 	}
 }

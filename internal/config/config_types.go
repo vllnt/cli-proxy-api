@@ -354,6 +354,17 @@ type RoutingConfig struct {
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
+	// QuotaAware uses fresh passive Claude and Codex quota windows for
+	// new bindings and safe same-provider failover: priority first, then paced shared-window
+	// headroom. A lower tier is used only when every higher-tier credential is pacing-hot.
+	// It never rewrites the requested provider or model.
+	// Unknown data uses Strategy unchanged.
+	QuotaAware bool `yaml:"quota-aware,omitempty" json:"quota-aware,omitempty"`
+
+	// QuotaMaxAge limits passive snapshot freshness when QuotaAware is enabled.
+	// Default: 5m. Missing, stale or invalid windows never imply exhaustion.
+	QuotaMaxAge string `yaml:"quota-max-age,omitempty" json:"quota-max-age,omitempty"`
+
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
 	// followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,

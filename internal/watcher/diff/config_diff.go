@@ -191,6 +191,12 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Routing.Strategy != newCfg.Routing.Strategy {
 		changes = append(changes, fmt.Sprintf("routing.strategy: %s -> %s", oldCfg.Routing.Strategy, newCfg.Routing.Strategy))
 	}
+	if oldCfg.Routing.QuotaAware != newCfg.Routing.QuotaAware {
+		changes = append(changes, fmt.Sprintf("routing.quota-aware: %t -> %t", oldCfg.Routing.QuotaAware, newCfg.Routing.QuotaAware))
+	}
+	if oldCfg.Routing.QuotaMaxAge != newCfg.Routing.QuotaMaxAge {
+		changes = append(changes, fmt.Sprintf("routing.quota-max-age: %s -> %s", oldCfg.Routing.QuotaMaxAge, newCfg.Routing.QuotaMaxAge))
+	}
 	if !reflect.DeepEqual(oldCfg.Payload, newCfg.Payload) {
 		changes = appendPayloadConfigChanges(changes, oldCfg.Payload, newCfg.Payload)
 	}

@@ -1031,6 +1031,25 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	m.updateSessionAffinity(result)
 }
 
+// RecordHTTPQuotaObservation records passive quota headers returned by an executor-owned HTTP route.
+// Raw routes do not have the executor's provider-specific error classifier, so they must not
+// feed status codes into MarkResult: doing so would change cooldowns, counters, hooks, and
+// session state for routes that historically only exposed their response to the caller.
+func (m *Manager) RecordHTTPQuotaObservation(ctx context.Context, authID, provider, model string, status int, headers http.Header) {
+	if m == nil || strings.TrimSpace(authID) == "" || status <= 0 || len(headers) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	auth, okAuth := m.auths[authID]
+	if !okAuth || auth == nil {
+		return
+	}
+	// Keep this path observation-only. The selector reads the in-memory auth snapshot;
+	// no generation, persistence, cooldown, scheduler, hook, or affinity state changes.
+	auth.Quota.ObserveResponseHeadersForProvider(provider, headers, time.Now())
+}
+
 func (m *Manager) updateSessionAffinity(result Result) {
 	if m == nil {
 		return

@@ -205,6 +205,10 @@ func isQuotaSignalHeaderForProvider(provider, name string) bool {
 		"-window-minutes",
 		"-reset-after-seconds",
 		"-reset-at",
+		"-resets-left",
+		"-reset-expiry",
+		"-expires-at",
+		"-expiry",
 		"-over-secondary-limit-percent",
 	} {
 		if strings.Contains(name, marker) {

@@ -26,6 +26,8 @@ type configCommit struct {
 
 type routingRuntimeState struct {
 	strategy                 string
+	quotaAware               bool
+	quotaMaxAge              time.Duration
 	sessionAffinity          bool
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
@@ -34,6 +36,7 @@ type routingRuntimeState struct {
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	state := routingRuntimeState{
 		strategy:                 "round-robin",
+		quotaMaxAge:              coreauth.DefaultQuotaMaxAge,
 		sessionAffinityTTL:       time.Hour,
 		sessionAffinitySubagents: true,
 	}
@@ -46,6 +49,12 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
+	}
+	state.quotaAware = cfg.Routing.QuotaAware
+	if state.quotaAware {
+		if parsed, errParse := time.ParseDuration(strings.TrimSpace(cfg.Routing.QuotaMaxAge)); errParse == nil && parsed > 0 {
+			state.quotaMaxAge = parsed
+		}
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -71,6 +80,9 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.FillFirstSelector{}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
+	}
+	if state.quotaAware {
+		selector = &coreauth.QuotaAwareSelector{Fallback: selector, MaxAge: state.quotaMaxAge}
 	}
 	if state.sessionAffinity {
 		subagents := state.sessionAffinitySubagents

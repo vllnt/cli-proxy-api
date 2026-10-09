@@ -38,13 +38,11 @@ func (*quotaAttemptIsolationExecutor) PrepareRequestAuth(context.Context, *Auth)
 }
 
 func (*quotaAttemptIsolationExecutor) Execute(ctx context.Context, _ *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	setQuotaAttemptIsolationHeaders(ctx)
-	return cliproxyexecutor.Response{}, quotaAttemptIsolationError()
+	return cliproxyexecutor.Response{Headers: quotaAttemptIsolationHeaders()}, quotaAttemptIsolationError()
 }
 
 func (*quotaAttemptIsolationExecutor) ExecuteStream(ctx context.Context, _ *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	setQuotaAttemptIsolationHeaders(ctx)
-	return nil, quotaAttemptIsolationError()
+	return &cliproxyexecutor.StreamResult{Headers: quotaAttemptIsolationHeaders()}, quotaAttemptIsolationError()
 }
 
 func (*quotaAttemptIsolationExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, error) {
@@ -59,13 +57,13 @@ func (*quotaAttemptIsolationExecutor) HttpRequest(context.Context, *Auth, *http.
 	return nil, &Error{HTTPStatus: http.StatusNotImplemented, Message: "not implemented"}
 }
 
-func setQuotaAttemptIsolationHeaders(ctx context.Context) {
-	internallogging.SetResponseHeaders(ctx, http.Header{
+func quotaAttemptIsolationHeaders() http.Header {
+	return http.Header{
 		"X-Codex-Plan-Type":                   []string{"pro"},
 		"X-Codex-Primary-Used-Percent":        []string{"91"},
 		"X-Codex-Primary-Window-Minutes":      []string{"10080"},
 		"X-Codex-Primary-Reset-After-Seconds": []string{"3600"},
-	})
+	}
 }
 
 func quotaAttemptIsolationError() error {
