@@ -47,7 +47,7 @@ type battleHarness struct {
 func newBattleHarness(t *testing.T, perProvider int) *battleHarness {
 	t.Helper()
 	withQuotaCooldownEnabled(t)
-	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{Fallback: &RoundRobinSelector{}, TTL: time.Hour})
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{Fallback: &QuotaAwareSelector{Fallback: &RoundRobinSelector{}}, TTL: time.Hour})
 	t.Cleanup(selector.Stop)
 	h := &battleHarness{t: t, manager: NewManager(nil, selector, nil), failing: map[string]bool{}}
 	h.manager.SetRetryConfig(0, 0, 0)
