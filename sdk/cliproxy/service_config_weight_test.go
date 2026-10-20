@@ -21,6 +21,25 @@ func TestWeightedRoundRobinRoutingSelector(t *testing.T) {
 	}
 }
 
+func TestHeadroomRoutingSelector(t *testing.T) {
+	state := normalizedRoutingRuntimeState(&internalconfig.Config{
+		Routing: internalconfig.RoutingConfig{Strategy: " Headroom "},
+	})
+	if state.strategy != "headroom" {
+		t.Fatalf("strategy = %q, want headroom", state.strategy)
+	}
+	if _, ok := newRoutingSelector(state).(*coreauth.HeadroomSelector); !ok {
+		t.Fatalf("selector type = %T, want *auth.HeadroomSelector", newRoutingSelector(state))
+	}
+
+	state.sessionAffinity = true
+	selector, ok := newRoutingSelector(state).(*coreauth.SessionAffinitySelector)
+	if !ok {
+		t.Fatalf("selector type with session affinity = %T, want *auth.SessionAffinitySelector", selector)
+	}
+	selector.Stop()
+}
+
 func TestServiceRejectsInvalidCredentialWeightConfigCommit(t *testing.T) {
 	originalCfg := &internalconfig.Config{}
 	service := &Service{cfg: originalCfg}
