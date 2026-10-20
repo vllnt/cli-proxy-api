@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
@@ -219,8 +220,9 @@ func TestHeadroomSelectorPick_PrefersLessUsedWithoutPilingOn(t *testing.T) {
 }
 
 // Picks made before any response updates the headers all see the same snapshot.
-// A fresh credential among busier ones takes only the pairs it is drawn in,
-// not every new session.
+// A fresh credential among busier ones takes only the pairs it is drawn in, not
+// every new session. With two candidates the less used one takes every pick
+// until its headers update (a documented limit).
 func TestHeadroomSelectorPick_BurstOnOneSnapshotSpreads(t *testing.T) {
 	t.Parallel()
 
@@ -232,6 +234,9 @@ func TestHeadroomSelectorPick_BurstOnOneSnapshotSpreads(t *testing.T) {
 	shares := headroomShares(t, fixedHeadroomSelector(now), "claude", auths, 56)
 	assertShare(t, shares, "fresh", 14.0/56)
 	assertShare(t, shares, "b1", 6.0/56)
+
+	shares = headroomShares(t, fixedHeadroomSelector(now), "claude", auths[:2], 10)
+	assertShare(t, shares, "fresh", 1)
 }
 
 func TestHeadroomSelectorPick_SpreadsEquallyUsedCredentials(t *testing.T) {
@@ -287,6 +292,7 @@ func TestHeadroomSelectorPick_FollowsLiveMembership(t *testing.T) {
 	disabled.Disabled = false
 	cooled.Quota = QuotaState{}
 	shares = headroomShares(t, fixedHeadroomSelector(now), "claude", []*Auth{used, disabled, cooled, added}, 120)
+	assertShare(t, shares, "used", 0)
 	for _, id := range []string{"disabled", "cooled", "added"} {
 		assertShare(t, shares, id, 1.0/3)
 	}
@@ -326,13 +332,20 @@ func TestHeadroomSelectorPick_KeepsPriorityTiers(t *testing.T) {
 func TestHeadroomSelectorPick_NonClaudeCandidatesUseRoundRobin(t *testing.T) {
 	t.Parallel()
 
+	apiKey := map[string]string{AttributeAPIKey: "test-key"}
 	for name, auths := range map[string][]*Auth{
 		"codex": {{ID: "b", Provider: "codex"}, {ID: "a", Provider: "codex"}, {ID: "c", Provider: "codex"}},
 		"mixed": {{ID: "b", Provider: "claude"}, {ID: "a", Provider: "codex"}, {ID: "c", Provider: "claude"}},
+		// API keys report no subscription windows, so they would always look unused.
+		"claude-api-key": {{ID: "b", Provider: "claude"}, {ID: "a", Provider: "claude", Attributes: apiKey}, {ID: "c", Provider: "claude"}},
 	} {
+		provider := name
+		if name == "claude-api-key" {
+			provider = "claude"
+		}
 		selector := &HeadroomSelector{}
 		for i, want := range []string{"a", "b", "c", "a"} {
-			got, err := selector.Pick(context.Background(), name, "", cliproxyexecutor.Options{}, auths)
+			got, err := selector.Pick(context.Background(), provider, "", cliproxyexecutor.Options{}, auths)
 			if err != nil {
 				t.Fatalf("%s Pick() #%d error = %v", name, i, err)
 			}
@@ -363,7 +376,7 @@ func TestHeadroomSelectorPick_QuotaAwareRegressions(t *testing.T) {
 	soonResetMostUsed := headroomAuth("most", now, 0.2, 3, 0.9, 12)
 	lateResetLeastUsed := headroomAuth("least", now, 0.2, 3, 0.1, 72)
 	shares := headroomShares(t, fixedHeadroomSelector(now), "claude", []*Auth{soonResetMostUsed, lateResetLeastUsed}, 10)
-	assertShare(t, shares, "least", 1)
+	assertShare(t, shares, "most", 0)
 
 	idle := []*Auth{headroomAuth("hot", now, 0.3, 3, 0.97, 20)}
 	for _, id := range []string{"i1", "i2", "i3", "i4"} {
@@ -371,6 +384,62 @@ func TestHeadroomSelectorPick_QuotaAwareRegressions(t *testing.T) {
 	}
 	shares = headroomShares(t, fixedHeadroomSelector(now), "claude", idle, 100)
 	assertShare(t, shares, "hot", 0)
+}
+
+// Through the manager's real pick path: new sessions follow the budget each
+// credential reports in its response headers, and a bound session stays on its
+// credential while another has more room.
+func TestManagerHeadroomRoutingWithSessionAffinity(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rng := mathrand.New(mathrand.NewPCG(3, 4))
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: &HeadroomSelector{randFunc: rng.IntN},
+		TTL:      time.Hour,
+	})
+	t.Cleanup(selector.Stop)
+	manager := NewManager(nil, selector, nil)
+	manager.RegisterExecutor(schedulerTestExecutor{provider: "claude"})
+	budget := map[string]float64{"big": 300, "small": 100}
+	for id := range budget {
+		if _, errRegister := manager.Register(ctx, &Auth{ID: id, Provider: "claude", Metadata: map[string]any{"access_token": "test-" + id}}); errRegister != nil {
+			t.Fatalf("Register(%s) error = %v", id, errRegister)
+		}
+	}
+	used := map[string]float64{}
+	reset := strconv.FormatInt(time.Now().Add(100*time.Hour).Unix(), 10)
+	pick := func(session string) string {
+		t.Helper()
+		headers := make(http.Header)
+		headers.Set("X-Session-ID", session)
+		auth, _, errPick := manager.pickNext(ctx, "claude", "", cliproxyexecutor.Options{Headers: headers}, nil)
+		if errPick != nil {
+			t.Fatalf("pickNext(%s) error = %v", session, errPick)
+		}
+		used[auth.ID]++
+		resultCtx := internallogging.WithResponseHeadersHolder(ctx)
+		internallogging.SetResponseHeaders(resultCtx, http.Header{
+			"Anthropic-Ratelimit-Unified-7d-Utilization": []string{strconv.FormatFloat(used[auth.ID]/budget[auth.ID], 'f', 4, 64)},
+			"Anthropic-Ratelimit-Unified-7d-Reset":       []string{reset},
+		})
+		manager.MarkResult(resultCtx, Result{AuthID: auth.ID, Provider: "claude", Success: true})
+		return auth.ID
+	}
+
+	for i := 0; i < 200; i++ {
+		pick("new-" + strconv.Itoa(i))
+	}
+	if spread := math.Abs(used["big"]/budget["big"] - used["small"]/budget["small"]); spread > 0.05 {
+		t.Fatalf("utilization spread = %.3f after 200 new sessions (used %v), want <= 0.05", spread, used)
+	}
+
+	bound := pick("bound")
+	for turn := 0; turn < 20; turn++ {
+		if got := pick("bound"); got != bound {
+			t.Fatalf("bound session moved from %s to %s on turn %d", bound, got, turn)
+		}
+	}
 }
 
 // Credentials of different, unknown sizes converge to a similar utilization, so

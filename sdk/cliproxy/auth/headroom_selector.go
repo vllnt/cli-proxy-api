@@ -31,26 +31,35 @@ type windowUsage struct {
 	reset time.Time
 }
 
-// HeadroomSelector picks Claude credentials by the budget they have left. Usage
-// comes from the anthropic-ratelimit-unified-5h/7d headers of each credential's
-// responses (Auth.Quota.Signals), so it follows whichever credentials are
-// enabled and available at pick time without any per-credential configuration.
+// HeadroomSelector picks Claude subscription credentials by the budget they have
+// left. Usage comes from the anthropic-ratelimit-unified-5h/7d headers of each
+// credential's responses (Auth.Quota.Signals), so it follows whichever
+// credentials are enabled and available at pick time without any
+// per-credential configuration.
 //
-// Each pick draws two distinct candidates at random and keeps the one whose
+// Each pick draws two different candidates at random and keeps the one whose
 // busier window has the lower utilization. Credentials therefore converge to a
 // similar utilization, so larger subscriptions take a larger share on their
 // own, while a burst of picks made before any header updates still spreads over
 // several credentials instead of piling onto the least used one. A credential
-// that reports no unified headers, or whose window has reset, counts as unused.
+// that has not reported yet, or whose window has reset, counts as unused.
 // Credentials near either limit are skipped while any other candidate is not.
+//
+// Limits: with only two candidates every pick goes to the less used one until
+// a response updates its headers. One of n candidates wins at most 2/n of new
+// picks, so a credential holding more of the combined budget than that falls
+// behind the others and keeps its spare budget until they reach the near-limit
+// threshold.
 //
 // Readings are remembered per credential until their window resets, because a
 // response without a window, a reload of the credential file or a refresh can
 // drop it from Quota.Signals. Readings are not persisted: after a restart every
 // credential counts as unused until its next response.
 //
-// Candidate lists with any non-Claude credential use round-robin. Wrap this
-// selector in SessionAffinitySelector to keep bound sessions on their credential.
+// Candidate lists with any non-Claude or API-key credential use round-robin:
+// API keys report no subscription windows and would always look unused. Wrap
+// this selector in SessionAffinitySelector to keep bound sessions on their
+// credential.
 type HeadroomSelector struct {
 	roundRobin RoundRobinSelector
 	nowFunc    func() time.Time
@@ -62,7 +71,7 @@ type HeadroomSelector struct {
 
 // Pick selects the next credential for a request.
 func (s *HeadroomSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
-	if !allClaudeAuths(auths) {
+	if !allClaudeSubscriptionAuths(auths) {
 		return s.roundRobin.Pick(ctx, provider, model, opts, auths)
 	}
 	now := time.Now()
@@ -93,7 +102,7 @@ func (s *HeadroomSelector) Pick(ctx context.Context, provider, model string, opt
 	return picked, nil
 }
 
-// pickLessUsed draws two distinct candidates and returns the index of the one
+// pickLessUsed draws two different candidates and returns the index of the one
 // with the lower utilization, or of the first drawn on a tie.
 func (s *HeadroomSelector) pickLessUsed(used []float64, candidates []int) int {
 	if len(candidates) == 1 {
@@ -175,10 +184,11 @@ func readClaudeWindow(signals map[string]string, window string) (windowUsage, bo
 	return reading, true
 }
 
-// allClaudeAuths reports whether every candidate is a Claude credential.
-func allClaudeAuths(auths []*Auth) bool {
+// allClaudeSubscriptionAuths reports whether every candidate is a Claude
+// credential other than an API key.
+func allClaudeSubscriptionAuths(auths []*Auth) bool {
 	for _, auth := range auths {
-		if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") {
+		if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "claude") || auth.AuthKind() == AuthKindAPIKey {
 			return false
 		}
 	}

@@ -10,12 +10,3 @@ func TestNormalizeRoutingStrategyWeightedRoundRobin(t *testing.T) {
 		}
 	}
 }
-
-func TestNormalizeRoutingStrategyHeadroom(t *testing.T) {
-	for _, input := range []string{"headroom", " Headroom "} {
-		got, ok := normalizeRoutingStrategy(input)
-		if !ok || got != "headroom" {
-			t.Fatalf("normalizeRoutingStrategy(%q) = %q, %v; want headroom, true", input, got, ok)
-		}
-	}
-}
