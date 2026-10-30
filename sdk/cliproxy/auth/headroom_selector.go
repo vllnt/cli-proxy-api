@@ -13,10 +13,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// claudeWindows lists the unified subscription windows the headroom selector
-// reads, and the utilization at which each window stops a credential from
-// receiving new picks while another candidate is below both. The budget left
-// above that point is kept for sessions already bound to the credential.
+// claudeWindows lists the unified subscription windows the headroom and
+// reset-aware selectors read, and the utilization at which each window stops a
+// credential from receiving new picks while another candidate is below both.
+// The budget left above that point is kept for sessions already bound to the
+// credential.
 var claudeWindows = [...]struct {
 	name      string
 	nearLimit float64

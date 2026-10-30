@@ -141,11 +141,12 @@ routing:
   # first: each pick takes the credential with the highest share of its 7d window left per hour until
   # that window resets (80% left in 1h goes before 30% left in 5 days), so weekly budget is not lost
   # at reset. Credentials near a limit (5h >= 90%, 7d >= 98%) get no new picks while another is
-  # below, and a credential whose weekly window is unknown counts as a fresh week until its first
-  # response reports it. Equal scores rotate round-robin; other providers and Claude API keys use
-  # round-robin. Only new sessions are routed by it: with session-affinity, a bound session stays on
-  # its credential until the credential becomes unavailable or the session is idle for the full
-  # session-affinity-ttl (every request renews it). Give Claude credentials the same priority.
+  # below. Usage is not persisted, so after a restart a credential with no reading yet ties with the
+  # best-scoring one until its first response reports its windows. Equal scores rotate round-robin;
+  # other providers and Claude API keys use round-robin. Only new sessions are routed by it: with
+  # session-affinity, a bound session stays on its credential until the credential becomes
+  # unavailable or the session is idle for the full session-affinity-ttl (every request renews it).
+  # Give Claude credentials the same priority.
   # Enable universal session-sticky routing for all clients.
   # Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
   # followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,

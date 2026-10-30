@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"math"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -28,20 +29,23 @@ const (
 //
 // The 5h window caps how fast a credential can be drained, so credentials near
 // either limit (see claudeWindows) get no new picks while another is below, and
-// a credential whose 5h window frees up again goes back to the front of the
-// line. When every candidate is near a limit the scores decide anyway: a real
-// rejection cools the credential and takes it out of the candidates.
+// a credential whose 5h window frees up again can lead again. When every
+// candidate is near a limit the scores decide anyway: a real rejection cools the
+// credential and takes it out of the candidates.
 //
 // Usage comes from the anthropic-ratelimit-unified-5h/7d headers of each
-// credential's responses (Auth.Quota.Signals). A credential whose weekly window
-// is unknown, for example one not used since a restart, scores as a fresh week.
-// It is therefore tried soon and reports its real window with the first
-// response. Ties, such as several unobserved credentials, rotate round-robin.
+// credential's responses (Auth.Quota.Signals). Readings are not persisted, so
+// after a restart no credential has one. A credential with no reading ties with
+// the best-scoring one until its first response reports its real windows;
+// otherwise the first credential to report would capture every new session and
+// hide one whose week is about to expire. A credential with only a 5h reading
+// scores its weekly window as a fresh week. Ties rotate round-robin.
 //
 // Limits: picks follow the last known readings, so a burst of new sessions made
 // before the next response updates them all land on the top-scoring credential,
-// and the 5h near-limit threshold moves the rest to the next. Weights and
-// per-credential sizes are not needed because windows report fractions.
+// and the 5h near-limit threshold moves the rest to the next. A credential that
+// never reports a window keeps sharing the lead. Weights and per-credential
+// sizes are not needed because windows report fractions.
 //
 // Candidate lists with any non-Claude or API-key credential use round-robin: API
 // keys report no subscription windows. Wrap this selector in
@@ -67,9 +71,10 @@ func (s *ResetAwareSelector) Pick(ctx context.Context, provider, model string, o
 		return nil, errAvailable
 	}
 
+	readings := s.readWindows(available, now)
 	scores := make([]float64, len(available))
 	open := make([]int, 0, len(available))
-	for i, windows := range s.readWindows(available, now) {
+	for i, windows := range readings {
 		scores[i] = weeklyDrainRate(windows[weeklyWindow], now)
 		if !nearAnyLimit(windows) {
 			open = append(open, i)
@@ -78,6 +83,18 @@ func (s *ResetAwareSelector) Pick(ctx context.Context, provider, model string, o
 	if len(open) == 0 {
 		for i := range available {
 			open = append(open, i)
+		}
+	}
+	var noReading [len(claudeWindows)]windowUsage
+	lead := 0.0
+	for _, i := range open {
+		if readings[i] != noReading {
+			lead = math.Max(lead, scores[i])
+		}
+	}
+	for _, i := range open {
+		if readings[i] == noReading {
+			scores[i] = lead
 		}
 	}
 

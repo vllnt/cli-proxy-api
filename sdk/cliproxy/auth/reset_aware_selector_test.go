@@ -106,25 +106,85 @@ func TestResetAwareSelectorPick_ScoresDecideWhenEveryoneIsNearLimit(t *testing.T
 	assertShare(t, shares, "weekly", 1)
 }
 
-// A credential whose weekly window is unknown scores as a fresh week; several of
-// them rotate round-robin.
-func TestResetAwareSelectorPick_UnobservedCountsAsFreshWeek(t *testing.T) {
+// A credential with no reading ties with the best-scoring one until its first
+// response reports its windows, and ties rotate round-robin.
+func TestResetAwareSelectorPick_UnobservedTiesWithTheLeader(t *testing.T) {
 	t.Parallel()
 
 	now := time.Unix(1_800_000_000, 0)
 	slow := headroomAuth("slow", now, 0, 4, 0.5, 100)
 	soon := headroomAuth("soon", now, 0, 4, 0.1, 10)
+	later := headroomAuth("later", now, 0, 4, 0.5, 120)
 
 	shares := headroomShares(t, fixedResetAwareSelector(now), "claude", []*Auth{slow, unobservedClaudeAuth("new")}, 10)
-	assertShare(t, shares, "new", 1)
+	assertShare(t, shares, "new", 0.5)
+	assertShare(t, shares, "slow", 0.5)
 
-	shares = headroomShares(t, fixedResetAwareSelector(now), "claude", []*Auth{soon, unobservedClaudeAuth("new")}, 10)
-	assertShare(t, shares, "soon", 1)
+	// The leader is the best score, so the credential that scores lower stays out.
+	shares = headroomShares(t, fixedResetAwareSelector(now), "claude", []*Auth{soon, later, unobservedClaudeAuth("new")}, 10)
+	assertShare(t, shares, "new", 0.5)
+	assertShare(t, shares, "soon", 0.5)
 
-	rotating := []*Auth{unobservedClaudeAuth("c"), unobservedClaudeAuth("a"), unobservedClaudeAuth("b"), slow}
+	rotating := []*Auth{unobservedClaudeAuth("c"), unobservedClaudeAuth("a"), unobservedClaudeAuth("b")}
 	shares = headroomShares(t, fixedResetAwareSelector(now), "claude", rotating, 120)
 	for _, id := range []string{"a", "b", "c"} {
 		assertShare(t, shares, id, 1.0/3)
+	}
+}
+
+// A credential near a limit does not set the lead the unobserved ones tie with.
+func TestResetAwareSelectorPick_NearLimitCredentialDoesNotSetTheLead(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(1_800_000_000, 0)
+	hot := headroomAuth("hot", now, 0.95, 2, 0.2, 1)
+	slow := headroomAuth("slow", now, 0, 4, 0.5, 100)
+	shares := headroomShares(t, fixedResetAwareSelector(now), "claude", []*Auth{hot, slow, unobservedClaudeAuth("new")}, 10)
+	assertShare(t, shares, "hot", 0)
+	assertShare(t, shares, "new", 0.5)
+	assertShare(t, shares, "slow", 0.5)
+}
+
+// Readings are not persisted, so after a restart no credential has one. The
+// credential whose week ends first is found within a few picks and then leads,
+// instead of staying hidden behind the first credential to report.
+func TestResetAwareSelectorPick_FindsSoonestResetAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(1_800_000_000, 0)
+	type week struct{ used, hours float64 }
+	weeks := map[string]week{"a": {0.5, 48}, "b": {0.9, 100}, "c": {0.2, 1}, "d": {0.1, 150}}
+	auths := []*Auth{unobservedClaudeAuth("a"), unobservedClaudeAuth("b"), unobservedClaudeAuth("c"), unobservedClaudeAuth("d")}
+	selector := fixedResetAwareSelector(now)
+	pick := func() string {
+		got, err := selector.Pick(context.Background(), "claude", "", cliproxyexecutor.Options{}, auths)
+		if err != nil {
+			t.Fatalf("Pick() error = %v", err)
+		}
+		// The response headers report the real window of the picked credential.
+		setHeadroomSignals(got, now, 0, 4, weeks[got.ID].used, weeks[got.ID].hours)
+		return got.ID
+	}
+
+	seen := map[string]bool{}
+	foundAt := -1
+	for i := 0; i < 16 && len(seen) < len(auths); i++ {
+		id := pick()
+		seen[id] = true
+		if id == "c" && foundAt < 0 {
+			foundAt = i
+		}
+	}
+	if len(seen) != len(auths) {
+		t.Fatalf("only %v were tried within 16 picks", seen)
+	}
+	if foundAt < 0 || foundAt >= 2*len(auths) {
+		t.Fatalf("the credential with 80%% of its week left and a reset in 1h was first tried at pick #%d, want within %d", foundAt, 2*len(auths))
+	}
+	for i := 0; i < 20; i++ {
+		if got := pick(); got != "c" {
+			t.Fatalf("pick #%d once every credential reported = %s, want c", i, got)
+		}
 	}
 }
 
