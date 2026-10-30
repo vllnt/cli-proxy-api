@@ -63,7 +63,7 @@ func fixedHeadroomSelector(now time.Time) *HeadroomSelector {
 	return &HeadroomSelector{nowFunc: func() time.Time { return now }, randFunc: allPairs()}
 }
 
-func headroomShares(t *testing.T, selector *HeadroomSelector, provider string, auths []*Auth, picks int) map[string]float64 {
+func headroomShares(t *testing.T, selector Selector, provider string, auths []*Auth, picks int) map[string]float64 {
 	t.Helper()
 	counts := make(map[string]int)
 	for i := 0; i < picks; i++ {

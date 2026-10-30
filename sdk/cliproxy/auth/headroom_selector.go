@@ -25,10 +25,67 @@ var claudeWindows = [...]struct {
 	{name: "7d", nearLimit: 0.98},
 }
 
+// weeklyWindow is the index of the 7d window in claudeWindows.
+const weeklyWindow = 1
+
 // windowUsage is the last known reading of one unified window.
 type windowUsage struct {
 	used  float64
 	reset time.Time
+}
+
+// claudeUsageMemory remembers each credential's last reading of the unified
+// windows until the window resets, because a response without a window, a reload
+// of the credential file or a refresh can drop it from Quota.Signals. Readings
+// are not persisted: after a restart every credential counts as unused until its
+// next response. The zero value is ready to use.
+type claudeUsageMemory struct {
+	mu   sync.Mutex
+	seen map[string][len(claudeWindows)]windowUsage
+}
+
+// readWindows returns the current reading of every window of each credential,
+// in claudeWindows order. A window that was never seen or has reset is the zero
+// windowUsage.
+func (m *claudeUsageMemory) readWindows(auths []*Auth, now time.Time) [][len(claudeWindows)]windowUsage {
+	readings := make([][len(claudeWindows)]windowUsage, len(auths))
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen == nil {
+		m.seen = make(map[string][len(claudeWindows)]windowUsage)
+	}
+	for i, auth := range auths {
+		signals := make(map[string]string, len(auth.Quota.Signals))
+		for key, value := range auth.Quota.Signals {
+			signals[strings.ToLower(key)] = strings.TrimSpace(value)
+		}
+		known := m.seen[auth.ID]
+		for w, window := range claudeWindows {
+			if reading, ok := readClaudeWindow(signals, window.name); ok {
+				known[w] = reading
+			}
+			if !known[w].reset.After(now) {
+				known[w] = windowUsage{}
+			}
+		}
+		if known == ([len(claudeWindows)]windowUsage{}) {
+			delete(m.seen, auth.ID)
+		} else {
+			m.seen[auth.ID] = known
+		}
+		readings[i] = known
+	}
+	return readings
+}
+
+// nearAnyLimit reports whether any window has reached its near-limit utilization.
+func nearAnyLimit(windows [len(claudeWindows)]windowUsage) bool {
+	for w, window := range claudeWindows {
+		if windows[w].used >= window.nearLimit {
+			return true
+		}
+	}
+	return false
 }
 
 // HeadroomSelector picks Claude subscription credentials by the budget they have
@@ -61,12 +118,10 @@ type windowUsage struct {
 // this selector in SessionAffinitySelector to keep bound sessions on their
 // credential.
 type HeadroomSelector struct {
+	claudeUsageMemory
 	roundRobin RoundRobinSelector
 	nowFunc    func() time.Time
 	randFunc   func(n int) int
-
-	mu   sync.Mutex
-	seen map[string][len(claudeWindows)]windowUsage
 }
 
 // Pick selects the next credential for a request.
@@ -129,35 +184,11 @@ func (s *HeadroomSelector) pickLessUsed(used []float64, candidates []int) int {
 func (s *HeadroomSelector) usage(auths []*Auth, now time.Time) ([]float64, []int) {
 	used := make([]float64, len(auths))
 	open := make([]int, 0, len(auths))
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.seen == nil {
-		s.seen = make(map[string][len(claudeWindows)]windowUsage)
-	}
-	for i, auth := range auths {
-		signals := make(map[string]string, len(auth.Quota.Signals))
-		for key, value := range auth.Quota.Signals {
-			signals[strings.ToLower(key)] = strings.TrimSpace(value)
+	for i, windows := range s.readWindows(auths, now) {
+		for _, window := range windows {
+			used[i] = math.Max(used[i], window.used)
 		}
-		known := s.seen[auth.ID]
-		nearLimit := false
-		for w, window := range claudeWindows {
-			if reading, ok := readClaudeWindow(signals, window.name); ok {
-				known[w] = reading
-			}
-			if !known[w].reset.After(now) {
-				known[w] = windowUsage{}
-				continue
-			}
-			used[i] = math.Max(used[i], known[w].used)
-			nearLimit = nearLimit || known[w].used >= window.nearLimit
-		}
-		if known == ([len(claudeWindows)]windowUsage{}) {
-			delete(s.seen, auth.ID)
-		} else {
-			s.seen[auth.ID] = known
-		}
-		if !nearLimit {
+		if !nearAnyLimit(windows) {
 			open = append(open, i)
 		}
 	}
