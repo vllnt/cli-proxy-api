@@ -48,6 +48,8 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "fill-first"
 	case "headroom":
 		state.strategy = "headroom"
+	case "reset-aware":
+		state.strategy = "reset-aware"
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -73,6 +75,8 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.FillFirstSelector{}
 	case "headroom":
 		selector = &coreauth.HeadroomSelector{}
+	case "reset-aware":
+		selector = &coreauth.ResetAwareSelector{}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}

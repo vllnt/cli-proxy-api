@@ -40,6 +40,25 @@ func TestHeadroomRoutingSelector(t *testing.T) {
 	selector.Stop()
 }
 
+func TestResetAwareRoutingSelector(t *testing.T) {
+	state := normalizedRoutingRuntimeState(&internalconfig.Config{
+		Routing: internalconfig.RoutingConfig{Strategy: " Reset-Aware "},
+	})
+	if state.strategy != "reset-aware" {
+		t.Fatalf("strategy = %q, want reset-aware", state.strategy)
+	}
+	if _, ok := newRoutingSelector(state).(*coreauth.ResetAwareSelector); !ok {
+		t.Fatalf("selector type = %T, want *auth.ResetAwareSelector", newRoutingSelector(state))
+	}
+
+	state.sessionAffinity = true
+	selector, ok := newRoutingSelector(state).(*coreauth.SessionAffinitySelector)
+	if !ok {
+		t.Fatalf("selector type with session affinity = %T, want *auth.SessionAffinitySelector", selector)
+	}
+	selector.Stop()
+}
+
 func TestServiceRejectsInvalidCredentialWeightConfigCommit(t *testing.T) {
 	originalCfg := &internalconfig.Config{}
 	service := &Service{cfg: originalCfg}
