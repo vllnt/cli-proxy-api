@@ -24,8 +24,8 @@ const (
 // highest fraction of the weekly window left per hour until it resets. A
 // credential with 80% left that resets in one hour (0.8 per hour) goes before
 // one with 30% left that resets in five days (0.0025 per hour). Credentials
-// converge on draining at the same relative rate, so all of them end the week
-// near empty instead of the ones that happen to be picked first.
+// converge on draining at the same relative rate, so budget that expires soon
+// is spent before budget that keeps, as far as demand allows.
 //
 // The 5h window caps how fast a credential can be drained, so credentials near
 // either limit (see claudeWindows) get no new picks while another is below, and
