@@ -225,3 +225,38 @@ func TestExecuteWithAuthManagerHonorsAPIKeyAllowlist(t *testing.T) {
 		t.Fatalf("unrestricted key should rotate over all 4 credentials, got %v", seen)
 	}
 }
+
+// A restricted key keeps the usual model-not-found error for a model nobody serves; the allowlist
+// error is only for a model that exists but is served by no allowed credential.
+func TestRestrictedKeyModelErrors(t *testing.T) {
+	servedElsewhere := "handler-api-key-allowlist-elsewhere-model"
+	executor := &interceptorCaptureExecutor{
+		provider: "handler-api-key-allowlist-errors",
+		execute: func(_ context.Context, auth *coreauth.Auth, _ coreexecutor.Request, _ coreexecutor.Options) (coreexecutor.Response, error) {
+			t.Fatalf("a credential was invoked: %s", auth.ID)
+			return coreexecutor.Response{}, nil
+		},
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	outside := &coreauth.Auth{ID: "ak-outside.json", Provider: executor.provider, Status: coreauth.StatusActive}
+	registry.GetGlobalRegistry().RegisterClient(outside.ID, outside.Provider, []*registry.ModelInfo{{ID: servedElsewhere}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(outside.ID) })
+	if _, err := manager.Register(context.Background(), outside); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	handler := NewBaseAPIHandlers(allowlistTestConfig(), manager)
+	ctx := ginContextForKey("test-key-monitor", true)
+
+	_, _, unknown := handler.ExecuteWithAuthManager(ctx, "openai", "handler-api-key-allowlist-nobody-serves-this", []byte(`{}`), "")
+	if unknown == nil || unknown.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(string(BuildErrorResponseBodyWithError(unknown.StatusCode, unknown.Error.Error(), unknown.Error)), "model_not_found") {
+		t.Fatalf("unknown model: want 400 model_not_found, got %+v", unknown)
+	}
+
+	_, _, elsewhere := handler.ExecuteWithAuthManager(ctx, "openai", servedElsewhere, []byte(`{}`), "")
+	if elsewhere == nil || elsewhere.StatusCode != http.StatusServiceUnavailable ||
+		!strings.Contains(string(BuildErrorResponseBodyWithError(elsewhere.StatusCode, elsewhere.Error.Error(), elsewhere.Error)), "api_key_allowlist_unavailable") {
+		t.Fatalf("model served only outside the allowlist: want 503 api_key_allowlist_unavailable, got %+v", elsewhere)
+	}
+}

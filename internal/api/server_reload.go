@@ -163,6 +163,10 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	if exampleAPIKeySafeModeRequired {
 		s.exampleAPIKeySafeModeActive.Store(true)
 	}
+	// Publish the handlers' config (client key labels and their credential allowlists) before the
+	// access providers admit the client keys: a key must never be served under a policy older than the
+	// key itself, or a reload cut in between would leave a newly added restricted key unrestricted.
+	s.handlers.UpdateClients(effectiveSDKConfig(cfg))
 	accessConfigApplied := s.applyAccessConfig(oldCfg, cfg)
 	if accessConfigApplied || exampleAPIKeySafeModeRequired {
 		s.exampleAPIKeySafeModeActive.Store(exampleAPIKeySafeModeRequired)
@@ -186,7 +190,6 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	// Save YAML snapshot for next comparison
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 
-	s.handlers.UpdateClients(effectiveSDKConfig(cfg))
 	s.handlers.SetPluginHost(s.pluginHost)
 	if s.pluginHost != nil {
 		s.pluginHost.SetModelExecutor(s.handlers)

@@ -96,6 +96,11 @@ fails with the `503` above instead of becoming unrestricted.
   allowlist, never keys, labels' keys or auth IDs.
 - Config reload re-reads the allowlist for every new request. An invalid file is rejected and the
   last valid configuration (including its allowlist) stays in force.
+- A reload publishes the labels and allowlists to the request handlers **before** it admits the client
+  keys, so a newly added restricted key is never served under an older policy, even if the reload is
+  cancelled half way. A request resolves its restriction from the configuration in force when it is
+  dispatched (not when it authenticated): a key whose label or entry is removed by a reload is
+  unrestricted from the next dispatch on, which is what the new configuration says.
 
 ## Limits
 
