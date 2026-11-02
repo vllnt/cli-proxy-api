@@ -34,7 +34,7 @@ func Register(cfg *sdkconfig.SDKConfig) {
 func credentialAllowlists(cfg *sdkconfig.SDKConfig, keys []string) map[string]sdkaccess.CredentialAllowlist {
 	var lists map[string]sdkaccess.CredentialAllowlist
 	for _, key := range keys {
-		label, entry, restricted := cfg.APIKeyAuthAllowlistFor(key)
+		_, entry, restricted := cfg.APIKeyAuthAllowlistFor(key)
 		if !restricted {
 			continue
 		}
@@ -42,7 +42,6 @@ func credentialAllowlists(cfg *sdkconfig.SDKConfig, keys []string) map[string]sd
 			lists = make(map[string]sdkaccess.CredentialAllowlist)
 		}
 		lists[key] = sdkaccess.CredentialAllowlist{
-			Label:   label,
 			AuthIDs: append([]string{}, entry.AuthIDs...),
 			Tags:    append([]string{}, entry.Tags...),
 		}

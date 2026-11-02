@@ -37,7 +37,7 @@ func TestProviderBindsTheCredentialAllowlistToTheAdmittedKey(t *testing.T) {
 	provider := sdkaccess.RegisteredProviders()[0]
 
 	monitor := authenticateWithKey(t, provider, "monitor-key")
-	want := &sdkaccess.CredentialAllowlist{Label: "monitor", AuthIDs: []string{"claude-spare.json"}, Tags: []string{"monitor-pool"}}
+	want := &sdkaccess.CredentialAllowlist{AuthIDs: []string{"claude-spare.json"}, Tags: []string{"monitor-pool"}}
 	if !reflect.DeepEqual(monitor.CredentialAllowlist, want) {
 		t.Fatalf("monitor allowlist = %+v, want %+v", monitor.CredentialAllowlist, want)
 	}

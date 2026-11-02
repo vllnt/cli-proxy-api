@@ -27,9 +27,8 @@ type Result struct {
 }
 
 // CredentialAllowlist names the upstream credentials a principal may use: those whose ID is
-// in AuthIDs or that carry one of Tags. Label is for server logs only.
+// in AuthIDs or that carry one of Tags.
 type CredentialAllowlist struct {
-	Label   string
 	AuthIDs []string
 	Tags    []string
 }
@@ -41,7 +40,6 @@ func (l *CredentialAllowlist) Clone() *CredentialAllowlist {
 		return nil
 	}
 	return &CredentialAllowlist{
-		Label:   l.Label,
 		AuthIDs: append([]string{}, l.AuthIDs...),
 		Tags:    append([]string{}, l.Tags...),
 	}

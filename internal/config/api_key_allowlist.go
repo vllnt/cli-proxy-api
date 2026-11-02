@@ -17,7 +17,7 @@ type APIKeyAuthAllowlist struct {
 
 // APIKeyAuthAllowlistFor resolves the allowlist that applies to a client API key.
 // restricted is false (and the key keeps full access) when the key has no label or its
-// label has no allowlist entry. The returned label is for server logs only.
+// label has no allowlist entry.
 func (c *SDKConfig) APIKeyAuthAllowlistFor(apiKey string) (label string, entry APIKeyAuthAllowlist, restricted bool) {
 	apiKey = strings.TrimSpace(apiKey)
 	if c == nil || apiKey == "" || len(c.APIKeyAuthAllowlist) == 0 {

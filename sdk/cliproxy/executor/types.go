@@ -27,15 +27,14 @@ const APIKeyAuthAllowlistMetadataKey = "api_key_auth_allowlist"
 // A credential is allowed when its ID is listed or it carries one of the listed tags.
 // A list with neither IDs nor tags allows nothing.
 type APIKeyAuthAllowlist struct {
-	label   string
 	authIDs map[string]struct{}
 	tags    []string
 }
 
-// NewAPIKeyAuthAllowlist copies the inputs into an immutable allowlist. The label is
-// for logs only. Blank IDs and tags are ignored.
-func NewAPIKeyAuthAllowlist(label string, authIDs, tags []string) *APIKeyAuthAllowlist {
-	list := &APIKeyAuthAllowlist{label: label, authIDs: make(map[string]struct{}, len(authIDs))}
+// NewAPIKeyAuthAllowlist copies the inputs into an immutable allowlist. Blank IDs and tags
+// are ignored.
+func NewAPIKeyAuthAllowlist(authIDs, tags []string) *APIKeyAuthAllowlist {
+	list := &APIKeyAuthAllowlist{authIDs: make(map[string]struct{}, len(authIDs))}
 	for _, id := range authIDs {
 		if id = strings.TrimSpace(id); id != "" {
 			list.authIDs[id] = struct{}{}
@@ -47,14 +46,6 @@ func NewAPIKeyAuthAllowlist(label string, authIDs, tags []string) *APIKeyAuthAll
 		}
 	}
 	return list
-}
-
-// Label returns the client key label. It is meant for server logs, never for clients.
-func (a *APIKeyAuthAllowlist) Label() string {
-	if a == nil {
-		return ""
-	}
-	return a.label
 }
 
 // Allows reports whether the credential is allowed. hasTag reports whether the credential
@@ -87,7 +78,7 @@ func APIKeyAuthAllowlistFromMetadata(meta map[string]any) *APIKeyAuthAllowlist {
 	if list, ok := raw.(*APIKeyAuthAllowlist); ok && list != nil {
 		return list
 	}
-	return NewAPIKeyAuthAllowlist("", nil, nil)
+	return NewAPIKeyAuthAllowlist(nil, nil)
 }
 
 // AuthSelectionModelMetadataKey overrides the model used only for auth selection.

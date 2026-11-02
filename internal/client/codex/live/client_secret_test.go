@@ -268,7 +268,7 @@ func TestApplyClientSecretCallSession(t *testing.T) {
 func TestClientSecretCarriesTheIssuersCredentialAllowlist(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := &Handler{clientSecrets: newClientSecretStore()}
-	bound := &sdkaccess.CredentialAllowlist{Label: "monitor", AuthIDs: []string{"a.json"}, Tags: []string{"pool"}}
+	bound := &sdkaccess.CredentialAllowlist{AuthIDs: []string{"a.json"}, Tags: []string{"pool"}}
 	router := gin.New()
 	router.POST("/v1/realtime/client_secrets", func(c *gin.Context) {
 		c.Set("userApiKey", "issuer-key")
@@ -303,8 +303,8 @@ func TestClientSecretCarriesTheIssuersCredentialAllowlist(t *testing.T) {
 		return authorization
 	}
 	got := authenticate().CredentialAllowlist
-	if got == nil || got.Label != "monitor" || len(got.AuthIDs) != 1 || got.AuthIDs[0] != "a.json" || len(got.Tags) != 1 || got.Tags[0] != "pool" {
-		t.Fatalf("CredentialAllowlist = %+v, want the list bound at issuance (monitor, a.json, pool)", got)
+	if got == nil || len(got.AuthIDs) != 1 || got.AuthIDs[0] != "a.json" || len(got.Tags) != 1 || got.Tags[0] != "pool" {
+		t.Fatalf("CredentialAllowlist = %+v, want the list bound at issuance (a.json, pool)", got)
 	}
 	// Editing what one authentication returned must not reach the next one.
 	got.AuthIDs[0] = "tampered.json"

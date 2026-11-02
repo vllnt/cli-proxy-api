@@ -80,7 +80,7 @@ func (e authSelectionEligibility) restrictPickError(ctx context.Context, provide
 	if !isAuthUnavailableError(err) && !(errors.As(err, &authErr) && authErr != nil && authErr.Code == "auth_not_found") {
 		return err
 	}
-	logEntryWithRequestID(ctx).Warnf("api-key allowlist: no allowed credential available | label=%s providers=%s model=%s", e.allowlist.Label(), strings.Join(providers, ","), model)
+	logEntryWithRequestID(ctx).Warnf("api-key allowlist: no allowed credential available | providers=%s model=%s", strings.Join(providers, ","), model)
 	return newAPIKeyAllowlistUnavailableError()
 }
 

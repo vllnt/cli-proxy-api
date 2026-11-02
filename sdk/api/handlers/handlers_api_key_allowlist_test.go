@@ -55,9 +55,6 @@ func TestRequestExecutionMetadataCarriesAPIKeyAllowlist(t *testing.T) {
 			if restriction == nil {
 				t.Fatalf("%s: restricted key lost its restriction; metadata=%v", name, meta)
 			}
-			if restriction.Label() != "monitor" {
-				t.Fatalf("%s: label = %q", name, restriction.Label())
-			}
 			hasTag := func(a *coreauth.Auth) func(string) bool {
 				return func(tag string) bool { return a.Attributes["tags"] == tag }
 			}
@@ -286,7 +283,7 @@ func TestAuthSelectionMetadataPrefersTheRestrictionBoundAtAuthentication(t *test
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set("userApiKey", "retired-key")
-	c.Set(sdkaccess.CredentialAllowlistContextKey, &sdkaccess.CredentialAllowlist{Label: "monitor", AuthIDs: []string{"ak-allowed.json"}, Tags: []string{"monitor-pool"}})
+	c.Set(sdkaccess.CredentialAllowlistContextKey, &sdkaccess.CredentialAllowlist{AuthIDs: []string{"ak-allowed.json"}, Tags: []string{"monitor-pool"}})
 	ctx := context.WithValue(context.Background(), "gin", c)
 
 	for name, cfg := range map[string]*sdkconfig.SDKConfig{
@@ -296,7 +293,7 @@ func TestAuthSelectionMetadataPrefersTheRestrictionBoundAtAuthentication(t *test
 	} {
 		meta := AuthSelectionMetadata(ctx, cfg)
 		got := coreexecutor.APIKeyAuthAllowlistFromMetadata(meta)
-		if got == nil || got.Label() != "monitor" {
+		if got == nil {
 			t.Fatalf("%s: bound restriction lost, metadata = %v", name, meta)
 		}
 		hasTag := func(tag string) bool { return tag == "monitor-pool" }
