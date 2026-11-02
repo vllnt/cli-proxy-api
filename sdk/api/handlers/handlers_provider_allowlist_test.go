@@ -174,4 +174,5 @@ func TestExecuteWithAuthManagerHonorsAProviderSuppliedAllowlist(t *testing.T) {
 	requireDenied(t, "allowed credential does not exist", asPlugin(&sdkaccess.CredentialAllowlist{AuthIDs: []string{"pa-gone.json"}}))
 	requireDenied(t, "empty list", asPlugin(&sdkaccess.CredentialAllowlist{}))
 	requireDenied(t, "malformed bound value", asPlugin("plugin-pool"))
+	requireDenied(t, "typed nil bound value", asPlugin((*sdkaccess.CredentialAllowlist)(nil)))
 }

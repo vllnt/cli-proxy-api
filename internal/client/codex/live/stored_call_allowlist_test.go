@@ -53,6 +53,7 @@ func TestStoredCallReuseStaysInsideTheCallersAllowlist(t *testing.T) {
 		{"bound list wins over a configured list that would deny it", limited, configList(spare), bound(pinned), http.StatusOK, 1},
 		{"empty bound list denies everything", "plugin-principal", nil, bound(), http.StatusServiceUnavailable, 0},
 		{"malformed bound value denies everything", "plugin-principal", nil, "not-a-list", http.StatusServiceUnavailable, 0},
+		{"typed nil bound value denies everything", "plugin-principal", nil, (*sdkaccess.CredentialAllowlist)(nil), http.StatusServiceUnavailable, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
