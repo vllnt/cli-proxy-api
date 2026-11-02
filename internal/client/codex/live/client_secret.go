@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 )
 
 const (
@@ -38,7 +39,11 @@ type ClientSecretAuthorization struct {
 	Principal       string
 	IssuerPrincipal string
 	IssuerProvider  string
-	Session         json.RawMessage
+	// CredentialAllowlist is the restriction the issuing key was under when the secret was issued
+	// (nil when it was unrestricted). The secret is a bearer token for as long as it lives, so it
+	// keeps that cap even if a reload later revokes or relabels the issuing key.
+	CredentialAllowlist *sdkaccess.CredentialAllowlist
+	Session             json.RawMessage
 }
 
 type clientSecretEntry struct {
@@ -73,7 +78,7 @@ func newClientSecretStore() *clientSecretStore {
 	}
 }
 
-func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Duration, issuerPrincipal, issuerProvider string) (string, ClientSecretAuthorization, time.Time, error) {
+func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Duration, issuerPrincipal, issuerProvider string, allowlist *sdkaccess.CredentialAllowlist) (string, ClientSecretAuthorization, time.Time, error) {
 	if s == nil {
 		return "", ClientSecretAuthorization{}, time.Time{}, errors.New("Realtime client secret store unavailable")
 	}
@@ -90,6 +95,8 @@ func (s *clientSecretStore) create(session json.RawMessage, lifetime time.Durati
 		IssuerPrincipal: strings.TrimSpace(issuerPrincipal),
 		IssuerProvider:  strings.TrimSpace(issuerProvider),
 		Session:         append(json.RawMessage(nil), session...),
+
+		CredentialAllowlist: allowlist.Clone(),
 	}
 	now := s.currentTime()
 	expiresAt := now.Add(lifetime)
@@ -130,6 +137,7 @@ func (s *clientSecretStore) authenticate(token string) (ClientSecretAuthorizatio
 	}
 	s.mu.Unlock()
 	entry.authorization.Session = append(json.RawMessage(nil), entry.authorization.Session...)
+	entry.authorization.CredentialAllowlist = entry.authorization.CredentialAllowlist.Clone()
 	return entry.authorization, nil
 }
 
@@ -269,7 +277,7 @@ func (h *Handler) createClientSecret(c *gin.Context, session json.RawMessage, ex
 	issuerProvider, _ := c.Get("accessProvider")
 	issuerPrincipalValue, _ := issuerPrincipal.(string)
 	issuerProviderValue, _ := issuerProvider.(string)
-	token, authorization, expiresAt, errCreate := h.clientSecrets.create(upstreamSession, lifetime, issuerPrincipalValue, issuerProviderValue)
+	token, authorization, expiresAt, errCreate := h.clientSecrets.create(upstreamSession, lifetime, issuerPrincipalValue, issuerProviderValue, issuerCredentialAllowlist(c))
 	if errCreate != nil {
 		if errors.Is(errCreate, errClientSecretCapacity) {
 			c.Header("Retry-After", "1")
@@ -300,6 +308,19 @@ func (h *Handler) createClientSecret(c *gin.Context, session json.RawMessage, ex
 		ExpiresAt: expiresAt.Unix(),
 		Session:   responseSession,
 	})
+}
+
+// issuerCredentialAllowlist reads the restriction bound to the issuing request at authentication.
+// A value that is present but unusable allows nothing: it must never read as unrestricted.
+func issuerCredentialAllowlist(c *gin.Context) *sdkaccess.CredentialAllowlist {
+	bound, exists := c.Get(sdkaccess.CredentialAllowlistContextKey)
+	if !exists {
+		return nil
+	}
+	if list, ok := bound.(*sdkaccess.CredentialAllowlist); ok && list != nil {
+		return list
+	}
+	return &sdkaccess.CredentialAllowlist{}
 }
 
 func clientSecretLifetime(expiresAfter *struct {

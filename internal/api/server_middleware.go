@@ -229,6 +229,9 @@ func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handl
 		}
 		c.Set("userApiKey", principal)
 		c.Set("accessProvider", provider)
+		if authorization.CredentialAllowlist != nil {
+			c.Set(sdkaccess.CredentialAllowlistContextKey, authorization.CredentialAllowlist)
+		}
 		c.Set(codexlive.ClientSecretSessionContextKey, authorization.Session)
 		c.Set(codexlive.ClientSecretPrincipalContextKey, authorization.Principal)
 		c.Next()

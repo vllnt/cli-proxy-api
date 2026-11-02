@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -148,5 +150,70 @@ func TestReloadDoesNotUnrestrictAnInFlightRequest(t *testing.T) {
 		if recorder.Code != want {
 			t.Fatalf("%s after the reload: status %d, want %d", key, recorder.Code, want)
 		}
+	}
+}
+
+// A Realtime client secret is a bearer token that outlives the request that issued it. It must stay
+// capped to the issuing key's allowlist after a reload revokes or relabels that key; before the
+// restriction was bound at issuance, the secret fell back to a live lookup of the issuer's key and
+// came back unrestricted.
+func TestRealtimeClientSecretKeepsTheIssuersAllowlistAcrossAReload(t *testing.T) {
+	server := newTestServer(t)
+	withMonitor := func(key string, ids ...string) *proxyconfig.Config {
+		next := *server.cfg
+		next.SDKConfig = sdkconfig.SDKConfig{
+			APIKeys:             []string{"test-key", key},
+			APIKeyLabels:        map[string]string{"monitor": key},
+			APIKeyAuthAllowlist: map[string]sdkconfig.APIKeyAuthAllowlist{"monitor": {AuthIDs: ids}},
+		}
+		return &next
+	}
+	if !server.UpdateClientsContext(context.Background(), withMonitor("monitor-key-a", "claude-spare.json")) {
+		t.Fatal("initial reload failed")
+	}
+
+	issue := httptest.NewRequest(http.MethodPost, "/v1/realtime/client_secrets", strings.NewReader(`{"session":{"type":"realtime","model":"gpt-realtime"}}`))
+	issue.Header.Set("Authorization", "Bearer monitor-key-a")
+	issue.Header.Set("Content-Type", "application/json")
+	issued := httptest.NewRecorder()
+	server.engine.ServeHTTP(issued, issue)
+	var secret struct {
+		Value string `json:"value"`
+	}
+	if errUnmarshal := json.Unmarshal(issued.Body.Bytes(), &secret); issued.Code != http.StatusOK || errUnmarshal != nil || secret.Value == "" {
+		t.Fatalf("issue under the restricted key: status %d err=%v", issued.Code, errUnmarshal)
+	}
+
+	// The issuing key is revoked and a different key takes the label.
+	if !server.UpdateClientsContext(context.Background(), withMonitor("monitor-key-b", "claude-other.json")) {
+		t.Fatal("rotation reload failed")
+	}
+
+	type outcome struct {
+		restricted bool
+		allowed    []string
+	}
+	var got outcome
+	server.engine.GET("/realtime-probe", realtimeAuthMiddleware(server.accessManager, server.codexLiveHandler), func(c *gin.Context) {
+		ctx := context.WithValue(c.Request.Context(), "gin", c)
+		if list := coreexecutor.APIKeyAuthAllowlistFromMetadata(handlers.AuthSelectionMetadata(ctx, server.handlers.Cfg)); list != nil {
+			got.restricted = true
+			for _, id := range []string{"claude-spare.json", "claude-other.json", "claude-agents.json"} {
+				if list.Allows(id, nil) {
+					got.allowed = append(got.allowed, id)
+				}
+			}
+		}
+		c.Status(http.StatusOK)
+	})
+	use := httptest.NewRequest(http.MethodGet, "/realtime-probe", nil)
+	use.Header.Set("Authorization", "Bearer "+secret.Value)
+	used := httptest.NewRecorder()
+	server.engine.ServeHTTP(used, use)
+	if used.Code != http.StatusOK {
+		t.Fatalf("use of the secret: status %d, want %d", used.Code, http.StatusOK)
+	}
+	if !got.restricted || len(got.allowed) != 1 || got.allowed[0] != "claude-spare.json" {
+		t.Fatalf("secret after the issuer was revoked: restricted=%v allowed=%v, want restricted to claude-spare.json", got.restricted, got.allowed)
 	}
 }

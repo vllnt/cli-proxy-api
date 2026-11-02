@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -119,7 +120,7 @@ func TestClientSecretStoreRejectsExpiredToken(t *testing.T) {
 	store := newClientSecretStore()
 	now := time.Unix(1700000000, 0)
 	store.now = func() time.Time { return now }
-	token, _, _, errCreate := store.create(json.RawMessage(`{"type":"realtime","model":"gpt-live-1-codex"}`), time.Minute, "issuer", "test")
+	token, _, _, errCreate := store.create(json.RawMessage(`{"type":"realtime","model":"gpt-live-1-codex"}`), time.Minute, "issuer", "test", nil)
 	if errCreate != nil {
 		t.Fatalf("create() error = %v", errCreate)
 	}
@@ -258,5 +259,111 @@ func TestApplyClientSecretCallSession(t *testing.T) {
 	}
 	if payload.SDP != "v=0\r\n" || payload.Session.Instructions != "help" {
 		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+// A client secret keeps the credential restriction its issuing key had when it was issued: the
+// secret is a bearer token for as long as it lives, so a later reload (revoking or relabelling the
+// issuer) must not turn it into an unrestricted one.
+func TestClientSecretCarriesTheIssuersCredentialAllowlist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{clientSecrets: newClientSecretStore()}
+	bound := &sdkaccess.CredentialAllowlist{Label: "monitor", AuthIDs: []string{"a.json"}, Tags: []string{"pool"}}
+	router := gin.New()
+	router.POST("/v1/realtime/client_secrets", func(c *gin.Context) {
+		c.Set("userApiKey", "issuer-key")
+		c.Set("accessProvider", "config-inline")
+		c.Set(sdkaccess.CredentialAllowlistContextKey, bound)
+		c.Next()
+	}, handler.CreateClientSecret)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/client_secrets", strings.NewReader(`{"session":{"type":"realtime","model":"gpt-realtime"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Value string `json:"value"`
+	}
+	if errUnmarshal := json.Unmarshal(recorder.Body.Bytes(), &response); errUnmarshal != nil {
+		t.Fatalf("unmarshal response: %v", errUnmarshal)
+	}
+
+	// The issuing request's list is edited after issuance: the secret must not see it.
+	bound.AuthIDs[0] = "changed.json"
+	authenticate := func() ClientSecretAuthorization {
+		authRequest := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls", nil)
+		authRequest.Header.Set("Authorization", "Bearer "+response.Value)
+		authorization, matched, errAuthenticate := handler.AuthenticateClientSecret(authRequest)
+		if errAuthenticate != nil || !matched {
+			t.Fatalf("AuthenticateClientSecret() matched=%t error=%v", matched, errAuthenticate)
+		}
+		return authorization
+	}
+	got := authenticate().CredentialAllowlist
+	if got == nil || got.Label != "monitor" || len(got.AuthIDs) != 1 || got.AuthIDs[0] != "a.json" || len(got.Tags) != 1 || got.Tags[0] != "pool" {
+		t.Fatalf("CredentialAllowlist = %+v, want the list bound at issuance (monitor, a.json, pool)", got)
+	}
+	// Editing what one authentication returned must not reach the next one.
+	got.AuthIDs[0] = "tampered.json"
+	if again := authenticate().CredentialAllowlist; again == nil || again.AuthIDs[0] != "a.json" {
+		t.Fatalf("second CredentialAllowlist = %+v, want an independent copy of a.json", again)
+	}
+}
+
+func TestClientSecretIssuedWithoutARestrictionStaysUnrestricted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{clientSecrets: newClientSecretStore()}
+	router := gin.New()
+	router.POST("/v1/realtime/client_secrets", func(c *gin.Context) {
+		c.Set("userApiKey", "issuer-key")
+		c.Next()
+	}, handler.CreateClientSecret)
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/client_secrets", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var response struct {
+		Value string `json:"value"`
+	}
+	if errUnmarshal := json.Unmarshal(recorder.Body.Bytes(), &response); recorder.Code != http.StatusOK || errUnmarshal != nil {
+		t.Fatalf("status = %d err=%v body=%s", recorder.Code, errUnmarshal, recorder.Body.String())
+	}
+	authRequest := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls", nil)
+	authRequest.Header.Set("Authorization", "Bearer "+response.Value)
+	authorization, _, errAuthenticate := handler.AuthenticateClientSecret(authRequest)
+	if errAuthenticate != nil || authorization.CredentialAllowlist != nil {
+		t.Fatalf("error=%v CredentialAllowlist=%+v, want nil", errAuthenticate, authorization.CredentialAllowlist)
+	}
+}
+
+// A malformed value under the gin key must not read as "unrestricted" at issuance either.
+func TestClientSecretIssuedUnderAMalformedRestrictionAllowsNothing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{clientSecrets: newClientSecretStore()}
+	router := gin.New()
+	router.POST("/v1/realtime/client_secrets", func(c *gin.Context) {
+		c.Set("userApiKey", "issuer-key")
+		c.Set(sdkaccess.CredentialAllowlistContextKey, "not a list")
+		c.Next()
+	}, handler.CreateClientSecret)
+	request := httptest.NewRequest(http.MethodPost, "/v1/realtime/client_secrets", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var response struct {
+		Value string `json:"value"`
+	}
+	if errUnmarshal := json.Unmarshal(recorder.Body.Bytes(), &response); recorder.Code != http.StatusOK || errUnmarshal != nil {
+		t.Fatalf("status = %d err=%v body=%s", recorder.Code, errUnmarshal, recorder.Body.String())
+	}
+	authRequest := httptest.NewRequest(http.MethodPost, "/v1/realtime/calls", nil)
+	authRequest.Header.Set("Authorization", "Bearer "+response.Value)
+	authorization, _, errAuthenticate := handler.AuthenticateClientSecret(authRequest)
+	got := authorization.CredentialAllowlist
+	if errAuthenticate != nil || got == nil || len(got.AuthIDs) != 0 || len(got.Tags) != 0 {
+		t.Fatalf("error=%v CredentialAllowlist=%+v, want an empty (allow-nothing) list", errAuthenticate, got)
 	}
 }

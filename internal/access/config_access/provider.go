@@ -133,9 +133,7 @@ func (p *provider) credentialAllowlist(key string) *sdkaccess.CredentialAllowlis
 	if !ok {
 		return nil
 	}
-	list.AuthIDs = append([]string{}, list.AuthIDs...)
-	list.Tags = append([]string{}, list.Tags...)
-	return &list
+	return list.Clone()
 }
 
 func extractBearerToken(header string) string {

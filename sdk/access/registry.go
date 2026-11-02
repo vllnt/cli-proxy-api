@@ -34,9 +34,22 @@ type CredentialAllowlist struct {
 	Tags    []string
 }
 
+// Clone returns a private copy, so a holder cannot edit a list another request still reads.
+// A nil list clones to nil.
+func (l *CredentialAllowlist) Clone() *CredentialAllowlist {
+	if l == nil {
+		return nil
+	}
+	return &CredentialAllowlist{
+		Label:   l.Label,
+		AuthIDs: append([]string{}, l.AuthIDs...),
+		Tags:    append([]string{}, l.Tags...),
+	}
+}
+
 // CredentialAllowlistContextKey is the gin context key under which the request middleware
 // stores the authenticated principal's *CredentialAllowlist (absent when unrestricted).
-const CredentialAllowlistContextKey = "credentialAllowlist"
+const CredentialAllowlistContextKey = "cliproxy.credentialAllowlist"
 
 var (
 	registryMu        sync.RWMutex
