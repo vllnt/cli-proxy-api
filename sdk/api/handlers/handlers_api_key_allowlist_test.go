@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -248,15 +250,29 @@ func TestRestrictedKeyModelErrors(t *testing.T) {
 	handler := NewBaseAPIHandlers(allowlistTestConfig(), manager)
 	ctx := ginContextForKey("test-key-monitor", true)
 
+	errorCode := func(errMsg *interfaces.ErrorMessage) (int, string) {
+		t.Helper()
+		if errMsg == nil {
+			t.Fatal("want an error")
+		}
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(BuildErrorResponseBodyWithError(errMsg.StatusCode, errMsg.Error.Error(), errMsg.Error), &body); err != nil {
+			t.Fatalf("error body is not JSON: %v", err)
+		}
+		return errMsg.StatusCode, body.Error.Code
+	}
+
 	_, _, unknown := handler.ExecuteWithAuthManager(ctx, "openai", "handler-api-key-allowlist-nobody-serves-this", []byte(`{}`), "")
-	if unknown == nil || unknown.StatusCode != http.StatusBadRequest ||
-		!strings.Contains(string(BuildErrorResponseBodyWithError(unknown.StatusCode, unknown.Error.Error(), unknown.Error)), "model_not_found") {
-		t.Fatalf("unknown model: want 400 model_not_found, got %+v", unknown)
+	if status, code := errorCode(unknown); status != http.StatusBadRequest || code != "model_not_found" {
+		t.Fatalf("unknown model: got %d %q, want 400 model_not_found", status, code)
 	}
 
 	_, _, elsewhere := handler.ExecuteWithAuthManager(ctx, "openai", servedElsewhere, []byte(`{}`), "")
-	if elsewhere == nil || elsewhere.StatusCode != http.StatusServiceUnavailable ||
-		!strings.Contains(string(BuildErrorResponseBodyWithError(elsewhere.StatusCode, elsewhere.Error.Error(), elsewhere.Error)), "api_key_allowlist_unavailable") {
-		t.Fatalf("model served only outside the allowlist: want 503 api_key_allowlist_unavailable, got %+v", elsewhere)
+	if status, code := errorCode(elsewhere); status != http.StatusServiceUnavailable || code != "api_key_allowlist_unavailable" {
+		t.Fatalf("model served only outside the allowlist: got %d %q, want 503 api_key_allowlist_unavailable", status, code)
 	}
 }

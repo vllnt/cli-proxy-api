@@ -252,3 +252,99 @@ func TestAPIKeyAuthAllowlistExampleUncommentsAndLoads(t *testing.T) {
 		t.Fatal("the agents label has no allowlist entry and must stay unrestricted")
 	}
 }
+
+func TestWithRetiringAPIKeyRestrictions(t *testing.T) {
+	previous := &SDKConfig{
+		APIKeys:      []string{"key-a", "key-agents"},
+		APIKeyLabels: map[string]string{"monitor": "key-a", "agents": "key-agents"},
+		APIKeyAuthAllowlist: map[string]APIKeyAuthAllowlist{
+			"monitor": {AuthIDs: []string{"old-1.json"}},
+		},
+	}
+	lookup := func(c *SDKConfig, key string) (string, APIKeyAuthAllowlist, bool) {
+		return c.APIKeyAuthAllowlistFor(key)
+	}
+
+	t.Run("a rotated key keeps its old restriction until access stops admitting it", func(t *testing.T) {
+		current := &SDKConfig{
+			APIKeys:             []string{"key-b", "key-agents"},
+			APIKeyLabels:        map[string]string{"monitor": "key-b", "agents": "key-agents"},
+			APIKeyAuthAllowlist: map[string]APIKeyAuthAllowlist{"monitor": {AuthIDs: []string{"new-1.json"}}},
+		}
+		got := current.WithRetiringAPIKeyRestrictions(previous)
+		if _, entry, ok := lookup(got, "key-a"); !ok || len(entry.AuthIDs) != 1 || entry.AuthIDs[0] != "old-1.json" {
+			t.Fatalf("retiring key-a: restricted=%v entry=%+v, want the old entry", ok, entry)
+		}
+		if _, entry, ok := lookup(got, "key-b"); !ok || entry.AuthIDs[0] != "new-1.json" {
+			t.Fatalf("new key-b: restricted=%v entry=%+v, want the new entry", ok, entry)
+		}
+		if _, _, ok := lookup(got, "key-agents"); ok {
+			t.Fatal("an unrestricted key must stay unrestricted")
+		}
+	})
+
+	t.Run("a removed key and its binding stay restricted until access stops admitting it", func(t *testing.T) {
+		current := &SDKConfig{APIKeys: []string{"key-agents"}}
+		got := current.WithRetiringAPIKeyRestrictions(previous)
+		if _, _, ok := lookup(got, "key-a"); !ok {
+			t.Fatal("retiring key-a must stay restricted")
+		}
+	})
+
+	t.Run("a key that stays listed follows the new configuration at once", func(t *testing.T) {
+		current := &SDKConfig{APIKeys: []string{"key-a", "key-agents"}}
+		got := current.WithRetiringAPIKeyRestrictions(previous)
+		if got != current {
+			t.Fatal("nothing is retiring: want the same config back")
+		}
+		if _, _, ok := lookup(got, "key-a"); ok {
+			t.Fatal("removing a restriction while keeping the key takes effect immediately")
+		}
+	})
+
+	t.Run("nothing to retain returns the config itself", func(t *testing.T) {
+		current := &SDKConfig{APIKeys: []string{"key-x"}}
+		for name, prev := range map[string]*SDKConfig{"nil": nil, "no allowlist": {APIKeys: []string{"key-a"}, APIKeyLabels: map[string]string{"monitor": "key-a"}}} {
+			if got := current.WithRetiringAPIKeyRestrictions(prev); got != current {
+				t.Fatalf("%s: want the same config back", name)
+			}
+		}
+		if got := (*SDKConfig)(nil).WithRetiringAPIKeyRestrictions(previous); got != nil {
+			t.Fatal("nil config stays nil")
+		}
+	})
+
+	t.Run("a label without an allowlist entry is not carried", func(t *testing.T) {
+		current := &SDKConfig{APIKeys: []string{"key-agents"}}
+		got := current.WithRetiringAPIKeyRestrictions(previous)
+		if _, _, ok := lookup(got, "key-agents"); ok {
+			t.Fatal("agents had no entry before and must have none now")
+		}
+	})
+
+	t.Run("inputs are never modified and the carried label cannot collide", func(t *testing.T) {
+		current := &SDKConfig{
+			APIKeys:      []string{"key-b", "key-b2"},
+			APIKeyLabels: map[string]string{"monitor": "key-b", "monitor (retiring)": "key-b2"},
+			APIKeyAuthAllowlist: map[string]APIKeyAuthAllowlist{
+				"monitor":            {Tags: []string{"t"}},
+				"monitor (retiring)": {Tags: []string{"u"}},
+			},
+		}
+		before := len(current.APIKeyLabels) + len(current.APIKeyAuthAllowlist)
+		prevBefore := len(previous.APIKeyLabels) + len(previous.APIKeyAuthAllowlist)
+		got := current.WithRetiringAPIKeyRestrictions(previous)
+		if len(current.APIKeyLabels)+len(current.APIKeyAuthAllowlist) != before || len(previous.APIKeyLabels)+len(previous.APIKeyAuthAllowlist) != prevBefore {
+			t.Fatal("WithRetiringAPIKeyRestrictions modified its input")
+		}
+		if _, entry, ok := lookup(got, "key-a"); !ok || entry.AuthIDs[0] != "old-1.json" {
+			t.Fatalf("retiring key-a lost its restriction: %+v %v", entry, ok)
+		}
+		if _, entry, ok := lookup(got, "key-b"); !ok || entry.Tags[0] != "t" {
+			t.Fatalf("key-b changed: %+v %v", entry, ok)
+		}
+		if _, entry, ok := lookup(got, "key-b2"); !ok || entry.Tags[0] != "u" {
+			t.Fatalf("key-b2 lost its own entry to the carried label: %+v %v", entry, ok)
+		}
+	})
+}
