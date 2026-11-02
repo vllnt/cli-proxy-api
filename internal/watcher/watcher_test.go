@@ -1828,3 +1828,54 @@ func TestScheduleProcessEventsStopsOnContextDone(t *testing.T) {
 func hexString(data []byte) string {
 	return strings.ToLower(fmt.Sprintf("%x", data))
 }
+
+// An invalid api-key allowlist must be rejected at reload and leave the last valid config
+// (and its allowlist) in force; a later valid edit is applied normally.
+func TestReloadConfigInvalidAPIKeyAllowlistKeepsLastValidConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	write := func(allowlistLabel, labelKey string) {
+		body := "port: 8317\nauth-dir: " + authDir + "\naccess:\n  api-keys: [\"test-key-a\", \"test-key-b\"]\n" +
+			"  api-key-labels: {monitor: \"" + labelKey + "\"}\n" +
+			"  api-key-auth-allowlist:\n    " + allowlistLabel + ": {auth-ids: [\"a.json\"]}\n"
+		if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+	}
+
+	reloads := 0
+	w := &Watcher{configPath: configPath, authDir: authDir, reloadCallback: func(*config.Config) { reloads++ }}
+
+	write("monitor", "test-key-b")
+	w.reloadConfigIfChanged()
+	if reloads != 1 {
+		t.Fatalf("valid config must reload once, got %d", reloads)
+	}
+
+	for name, write := range map[string]func(){
+		"allowlist label without api-key-labels entry": func() { write("ghost", "test-key-b") },
+		"label key not in api-keys":                    func() { write("monitor", "test-key-missing") },
+	} {
+		write()
+		w.reloadConfigIfChanged()
+		if reloads != 1 {
+			t.Fatalf("%s: invalid config must not trigger the reload callback (reloads=%d)", name, reloads)
+		}
+		w.clientsMutex.RLock()
+		cfg := w.config
+		w.clientsMutex.RUnlock()
+		if cfg == nil || cfg.APIKeyLabels["monitor"] != "test-key-b" || len(cfg.APIKeyAuthAllowlist["monitor"].AuthIDs) != 1 {
+			t.Fatalf("%s: last valid config was lost: %+v", name, cfg)
+		}
+	}
+
+	write("monitor", "test-key-a")
+	w.reloadConfigIfChanged()
+	if reloads != 2 {
+		t.Fatalf("a later valid config must reload, got %d", reloads)
+	}
+}
