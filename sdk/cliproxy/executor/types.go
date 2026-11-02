@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
@@ -17,6 +18,77 @@ const RequestPathMetadataKey = "request_path"
 
 // DisallowFreeAuthMetadataKey instructs auth selection to skip known free-tier credentials.
 const DisallowFreeAuthMetadataKey = "disallow_free_auth"
+
+// APIKeyAuthAllowlistMetadataKey carries the *APIKeyAuthAllowlist that restricts auth
+// selection for the calling client API key. The key is absent for unrestricted requests.
+const APIKeyAuthAllowlistMetadataKey = "api_key_auth_allowlist"
+
+// APIKeyAuthAllowlist is an immutable set of credentials one client API key may use.
+// A credential is allowed when its ID is listed or it carries one of the listed tags.
+// A list with neither IDs nor tags allows nothing.
+type APIKeyAuthAllowlist struct {
+	label   string
+	authIDs map[string]struct{}
+	tags    []string
+}
+
+// NewAPIKeyAuthAllowlist copies the inputs into an immutable allowlist. The label is
+// for logs only. Blank IDs and tags are ignored.
+func NewAPIKeyAuthAllowlist(label string, authIDs, tags []string) *APIKeyAuthAllowlist {
+	list := &APIKeyAuthAllowlist{label: label, authIDs: make(map[string]struct{}, len(authIDs))}
+	for _, id := range authIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			list.authIDs[id] = struct{}{}
+		}
+	}
+	for _, tag := range tags {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			list.tags = append(list.tags, tag)
+		}
+	}
+	return list
+}
+
+// Label returns the client key label. It is meant for server logs, never for clients.
+func (a *APIKeyAuthAllowlist) Label() string {
+	if a == nil {
+		return ""
+	}
+	return a.label
+}
+
+// Allows reports whether the credential is allowed. hasTag reports whether the credential
+// carries a tag; it may be nil.
+func (a *APIKeyAuthAllowlist) Allows(authID string, hasTag func(tag string) bool) bool {
+	if a == nil {
+		return true
+	}
+	if _, ok := a.authIDs[authID]; ok {
+		return true
+	}
+	if hasTag == nil {
+		return false
+	}
+	for _, tag := range a.tags {
+		if hasTag(tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// APIKeyAuthAllowlistFromMetadata returns the allowlist stored in Options.Metadata, or nil
+// when the request is unrestricted. A present but malformed value fails closed (allows nothing).
+func APIKeyAuthAllowlistFromMetadata(meta map[string]any) *APIKeyAuthAllowlist {
+	raw, ok := meta[APIKeyAuthAllowlistMetadataKey]
+	if !ok {
+		return nil
+	}
+	if list, ok := raw.(*APIKeyAuthAllowlist); ok && list != nil {
+		return list
+	}
+	return NewAPIKeyAuthAllowlist("", nil, nil)
+}
 
 // AuthSelectionModelMetadataKey overrides the model used only for auth selection.
 const AuthSelectionModelMetadataKey = "auth_selection_model"
