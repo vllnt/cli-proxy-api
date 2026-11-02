@@ -20,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	coresession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
@@ -138,6 +139,9 @@ func BuildErrorResponseBodyWithError(status int, errText string, err error) []by
 			code = "internal_server_error"
 		}
 	}
+	if coreauth.IsAPIKeyAllowlistUnavailable(err) {
+		code = coreauth.ErrorCodeAPIKeyAllowlistUnavailable
+	}
 
 	payload, errMarshal := json.Marshal(ErrorResponse{
 		Error: ErrorDetail{
@@ -202,7 +206,9 @@ func executionPassthroughHeaders(cfg *config.SDKConfig, internal bool) bool {
 	return internal || PassthroughHeadersEnabled(cfg)
 }
 
-func requestExecutionMetadata(ctx context.Context) map[string]any {
+// requestExecutionMetadata builds the per-request execution metadata. cfg is the live
+// configuration snapshot used to resolve the client API key allowlist; nil means none.
+func requestExecutionMetadata(ctx context.Context, cfg *config.SDKConfig) map[string]any {
 	// Idempotency-Key is an optional client-supplied header used to correlate retries.
 	// Only include it if the client explicitly provides it.
 	key := ""
@@ -246,7 +252,54 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if disallowFreeAuthFromContext(ctx) {
 		meta[coreexecutor.DisallowFreeAuthMetadataKey] = true
 	}
+	addAPIKeyAuthAllowlistMetadata(meta, ctx, cfg)
 	return meta
+}
+
+// AuthSelectionMetadata returns the request-scoped credential restrictions for code that
+// selects a credential itself instead of calling ExecuteWithAuthManager. Pass the result
+// as Options.Metadata so the selection honors the client API key allowlist.
+func AuthSelectionMetadata(ctx context.Context, cfg *config.SDKConfig) map[string]any {
+	meta := make(map[string]any, 1)
+	addAPIKeyAuthAllowlistMetadata(meta, ctx, cfg)
+	return meta
+}
+
+// addAPIKeyAuthAllowlistMetadata stores the calling client key's credential restriction in meta.
+// The restriction bound to the principal at authentication (gin key
+// sdkaccess.CredentialAllowlistContextKey) wins: it comes from the configuration that admitted
+// the key, so a reload between authentication and selection cannot change it. Without one, the
+// key (gin key "userApiKey") is resolved to its label and allowlist in cfg. Requests without a
+// resolved key, a label, or an allowlist entry stay unrestricted.
+func addAPIKeyAuthAllowlistMetadata(meta map[string]any, ctx context.Context, cfg *config.SDKConfig) {
+	if meta == nil || ctx == nil {
+		return
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return
+	}
+	if bound, exists := ginCtx.Get(sdkaccess.CredentialAllowlistContextKey); exists {
+		if list, ok := bound.(*sdkaccess.CredentialAllowlist); ok && list != nil {
+			meta[coreexecutor.AllowedAuthsMetadataKey] = coreexecutor.NewAllowedAuths(list.AuthIDs, list.Tags)
+		} else {
+			// A malformed bound value must never read as "unrestricted": allow nothing.
+			meta[coreexecutor.AllowedAuthsMetadataKey] = coreexecutor.NewAllowedAuths(nil, nil)
+		}
+		return
+	}
+	if cfg == nil || len(cfg.APIKeyAuthAllowlist) == 0 {
+		return
+	}
+	value, exists := ginCtx.Get("userApiKey")
+	if !exists || value == nil {
+		return
+	}
+	_, entry, restricted := cfg.APIKeyAuthAllowlistFor(fmt.Sprint(value))
+	if !restricted {
+		return
+	}
+	meta[coreexecutor.AllowedAuthsMetadataKey] = coreexecutor.NewAllowedAuths(entry.AuthIDs, entry.Tags)
 }
 
 func requestClientIP(request *http.Request) string {

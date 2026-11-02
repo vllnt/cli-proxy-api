@@ -746,3 +746,42 @@ func TestBuildConfigChangeDetails_OverloadFailoverKeys(t *testing.T) {
 	expectContains(t, details, "overload-cooldown-seconds: 0 -> 5")
 	expectContains(t, details, "max-retry-duration: 0 -> 90")
 }
+
+// api-key-labels map a label to a client key and api-key-auth-allowlist names accounts: the
+// change log must show counts only, never keys, labels' keys or auth ids.
+func TestBuildConfigChangeDetails_RedactsAPIKeyLabelsAndAllowlist(t *testing.T) {
+	oldCfg := &config.Config{}
+	newCfg := &config.Config{SDKConfig: sdkconfig.SDKConfig{
+		APIKeys:      []string{"test-key-monitor"},
+		APIKeyLabels: map[string]string{"monitor": "test-key-monitor"},
+		APIKeyAuthAllowlist: map[string]sdkconfig.APIKeyAuthAllowlist{
+			"monitor": {AuthIDs: []string{"claude-0123abcd.json"}, Tags: []string{"monitor-pool"}},
+		},
+	}}
+
+	details := BuildConfigChangeDetails(oldCfg, newCfg)
+	expectContains(t, details, "api-key-labels count: 0 -> 1 (values redacted)")
+	expectContains(t, details, "api-key-auth-allowlist entries: 0 -> 1 (contents redacted)")
+	joined := strings.Join(details, "\n")
+	for _, secret := range []string{"test-key-monitor", "claude-0123abcd.json", "monitor-pool"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("change log leaks %q: %v", secret, details)
+		}
+	}
+
+	// A changed key behind the same label count is still reported without the value.
+	rotated := &config.Config{SDKConfig: sdkconfig.SDKConfig{
+		APIKeys:             []string{"test-key-rotated"},
+		APIKeyLabels:        map[string]string{"monitor": "test-key-rotated"},
+		APIKeyAuthAllowlist: newCfg.APIKeyAuthAllowlist,
+	}}
+	details = BuildConfigChangeDetails(newCfg, rotated)
+	expectContains(t, details, "api-key-labels count: 1 -> 1 (values redacted)")
+	if joined = strings.Join(details, "\n"); strings.Contains(joined, "test-key-rotated") || strings.Contains(joined, "test-key-monitor") {
+		t.Fatalf("change log leaks a key: %v", details)
+	}
+
+	if details = BuildConfigChangeDetails(newCfg, newCfg); len(details) != 0 {
+		t.Fatalf("unchanged config must report nothing, got %v", details)
+	}
+}

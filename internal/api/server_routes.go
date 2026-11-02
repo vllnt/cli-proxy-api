@@ -363,7 +363,11 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		c.JSON(clienterror.HTTPStatusFromErrorOr(errRoute, http.StatusServiceUnavailable), gin.H{"error": errRoute.Error()})
 		return
 	}
-	selectionOpts := coreexecutor.Options{Headers: selectionHeaders, OriginalRequest: body}
+	selectionOpts := coreexecutor.Options{
+		Headers:         selectionHeaders,
+		OriginalRequest: body,
+		Metadata:        handlers.AuthSelectionMetadata(ctx, s.handlers.Cfg),
+	}
 	var selection *auth.HomeDispatchSelection
 	var selected *auth.Auth
 	if s.handlers.AuthManager.HomeEnabled() {

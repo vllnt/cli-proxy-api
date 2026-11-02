@@ -168,6 +168,9 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 			if result != nil {
 				c.Set("userApiKey", result.Principal)
 				c.Set("accessProvider", result.Provider)
+				if result.CredentialAllowlist != nil {
+					c.Set(sdkaccess.CredentialAllowlistContextKey, result.CredentialAllowlist)
+				}
 				if len(result.Metadata) > 0 {
 					c.Set("accessMetadata", result.Metadata)
 				}
@@ -226,6 +229,9 @@ func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handl
 		}
 		c.Set("userApiKey", principal)
 		c.Set("accessProvider", provider)
+		if authorization.CredentialAllowlist != nil {
+			c.Set(sdkaccess.CredentialAllowlistContextKey, authorization.CredentialAllowlist)
+		}
 		c.Set(codexlive.ClientSecretSessionContextKey, authorization.Session)
 		c.Set(codexlive.ClientSecretPrincipalContextKey, authorization.Principal)
 		c.Next()

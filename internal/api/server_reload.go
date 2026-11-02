@@ -163,6 +163,11 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	if exampleAPIKeySafeModeRequired {
 		s.exampleAPIKeySafeModeActive.Store(true)
 	}
+	// The access providers bind each admitted key's credential allowlist to the request, so the
+	// restriction of a key never depends on which configuration a later lookup sees. Requests that
+	// resolve the restriction at dispatch (a key the providers did not admit, e.g. a realtime client
+	// secret) read the handlers' config, so publish it before the providers admit new client keys.
+	s.handlers.UpdateClients(effectiveSDKConfig(cfg))
 	accessConfigApplied := s.applyAccessConfig(oldCfg, cfg)
 	if accessConfigApplied || exampleAPIKeySafeModeRequired {
 		s.exampleAPIKeySafeModeActive.Store(exampleAPIKeySafeModeRequired)
@@ -186,7 +191,6 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	// Save YAML snapshot for next comparison
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 
-	s.handlers.UpdateClients(effectiveSDKConfig(cfg))
 	s.handlers.SetPluginHost(s.pluginHost)
 	if s.pluginHost != nil {
 		s.pluginHost.SetModelExecutor(s.handlers)

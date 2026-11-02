@@ -183,6 +183,9 @@ func (s *Service) stageHomeOverlayWithClient(ctx context.Context, remoteCfg *con
 	merged.Port = baseCfg.Port
 	merged.TLS = baseCfg.TLS
 	merged.Home = baseCfg.Home
+	if errAllowlist := merged.ValidateHomeAPIKeyAuthAllowlist(); errAllowlist != nil {
+		return nil, fmt.Errorf("home config rejected: %w", errAllowlist)
+	}
 	storeAuth := merged.Plugins.StoreAuth
 	forceHomeRuntimeConfig(&merged)
 	syncCfg := merged

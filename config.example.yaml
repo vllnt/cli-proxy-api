@@ -89,6 +89,18 @@ access:
     - "your-api-key-2"
     - "your-api-key-3"
 
+  # Optional: restrict a client API key to some upstream credentials (accounts).
+  # api-key-labels maps a label to a key from api-keys above; treat it like api-keys.
+  # A key without a label, or a label without an allowlist entry, keeps full access.
+  # An entry with neither auth-ids nor tags allows nothing. See docs/api-key-auth-allowlist.md.
+  # api-key-labels:
+  #   agents: "your-api-key-1"
+  #   monitor: "your-api-key-2"
+  # api-key-auth-allowlist:
+  #   monitor:
+  #     auth-ids: ["claude-0123abcd.json"]  # exact credential IDs
+  #     tags: ["monitor-pool"]               # credentials whose "tags" attribute/metadata lists it
+
 # Optional credential concurrency and observation contracts.
 
 # credentials:

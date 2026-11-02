@@ -201,6 +201,13 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	} else if !reflect.DeepEqual(trimStrings(oldCfg.APIKeys), trimStrings(newCfg.APIKeys)) {
 		changes = append(changes, "api-keys: values updated (count unchanged, redacted)")
 	}
+	// Labels map to client keys and allowlists name accounts: surface counts only.
+	if !reflect.DeepEqual(oldCfg.APIKeyLabels, newCfg.APIKeyLabels) {
+		changes = append(changes, fmt.Sprintf("api-key-labels count: %d -> %d (values redacted)", len(oldCfg.APIKeyLabels), len(newCfg.APIKeyLabels)))
+	}
+	if !reflect.DeepEqual(oldCfg.APIKeyAuthAllowlist, newCfg.APIKeyAuthAllowlist) {
+		changes = append(changes, fmt.Sprintf("api-key-auth-allowlist entries: %d -> %d (contents redacted)", len(oldCfg.APIKeyAuthAllowlist), len(newCfg.APIKeyAuthAllowlist)))
+	}
 	if len(oldCfg.GeminiKey) != len(newCfg.GeminiKey) {
 		changes = append(changes, fmt.Sprintf("gemini-api-key count: %d -> %d", len(oldCfg.GeminiKey), len(newCfg.GeminiKey)))
 	} else {

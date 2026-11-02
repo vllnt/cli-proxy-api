@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
@@ -17,6 +18,68 @@ const RequestPathMetadataKey = "request_path"
 
 // DisallowFreeAuthMetadataKey instructs auth selection to skip known free-tier credentials.
 const DisallowFreeAuthMetadataKey = "disallow_free_auth"
+
+// AllowedAuthsMetadataKey carries the *AllowedAuths that restricts auth
+// selection for the calling client API key. The key is absent for unrestricted requests.
+const AllowedAuthsMetadataKey = "allowed_auths"
+
+// AllowedAuths is an immutable set of credentials one client API key may use.
+// A credential is allowed when its ID is listed or it carries one of the listed tags.
+// A list with neither IDs nor tags allows nothing.
+type AllowedAuths struct {
+	authIDs map[string]struct{}
+	tags    []string
+}
+
+// NewAllowedAuths copies the inputs into an immutable allowlist. Blank IDs and tags
+// are ignored.
+func NewAllowedAuths(authIDs, tags []string) *AllowedAuths {
+	list := &AllowedAuths{authIDs: make(map[string]struct{}, len(authIDs))}
+	for _, id := range authIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			list.authIDs[id] = struct{}{}
+		}
+	}
+	for _, tag := range tags {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			list.tags = append(list.tags, tag)
+		}
+	}
+	return list
+}
+
+// Allows reports whether the credential is allowed. hasTag reports whether the credential
+// carries a tag; it may be nil.
+func (a *AllowedAuths) Allows(authID string, hasTag func(tag string) bool) bool {
+	if a == nil {
+		return true
+	}
+	if _, ok := a.authIDs[authID]; ok {
+		return true
+	}
+	if hasTag == nil {
+		return false
+	}
+	for _, tag := range a.tags {
+		if hasTag(tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowedAuthsFromMetadata returns the allowlist stored in Options.Metadata, or nil
+// when the request is unrestricted. A present but malformed value fails closed (allows nothing).
+func AllowedAuthsFromMetadata(meta map[string]any) *AllowedAuths {
+	raw, ok := meta[AllowedAuthsMetadataKey]
+	if !ok {
+		return nil
+	}
+	if list, ok := raw.(*AllowedAuths); ok && list != nil {
+		return list
+	}
+	return NewAllowedAuths(nil, nil)
+}
 
 // AuthSelectionModelMetadataKey overrides the model used only for auth selection.
 const AuthSelectionModelMetadataKey = "auth_selection_model"

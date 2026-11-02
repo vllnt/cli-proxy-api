@@ -373,6 +373,10 @@ func main() {
 			parsed = &config.Config{}
 		}
 		parsed.Home = homeCfg
+		if errAllowlist := parsed.ValidateHomeAPIKeyAuthAllowlist(); errAllowlist != nil {
+			log.Errorf("invalid config from home: %v", errAllowlist)
+			return
+		}
 		parsed.Port = config.NormalizeHomePort(parsed.Port)
 		parsed.UsageStatisticsEnabled = true
 		pluginSyncCfg := *parsed

@@ -18,7 +18,36 @@ type Result struct {
 	Provider  string
 	Principal string
 	Metadata  map[string]string
+
+	// CredentialAllowlist, when set, restricts the authenticated principal to the listed
+	// upstream credentials. A provider fills it from the same configuration snapshot that
+	// admitted the principal, so a request is never admitted under one configuration and
+	// restricted under another.
+	CredentialAllowlist *CredentialAllowlist
 }
+
+// CredentialAllowlist names the upstream credentials a principal may use: those whose ID is
+// in AuthIDs or that carry one of Tags.
+type CredentialAllowlist struct {
+	AuthIDs []string
+	Tags    []string
+}
+
+// Clone returns a private copy, so a holder cannot edit a list another request still reads.
+// A nil list clones to nil.
+func (l *CredentialAllowlist) Clone() *CredentialAllowlist {
+	if l == nil {
+		return nil
+	}
+	return &CredentialAllowlist{
+		AuthIDs: append([]string{}, l.AuthIDs...),
+		Tags:    append([]string{}, l.Tags...),
+	}
+}
+
+// CredentialAllowlistContextKey is the gin context key under which the request middleware
+// stores the authenticated principal's *CredentialAllowlist (absent when unrestricted).
+const CredentialAllowlistContextKey = "cliproxy.credentialAllowlist"
 
 var (
 	registryMu        sync.RWMutex

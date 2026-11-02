@@ -65,7 +65,7 @@ func TestGetContextWithCancelCapturesResolvedClientIP(t *testing.T) {
 func TestRequestExecutionMetadataIncludesExecutionSessionWithoutIdempotencyKey(t *testing.T) {
 	ctx := WithExecutionSessionID(context.Background(), "session-1")
 
-	meta := requestExecutionMetadata(ctx)
+	meta := requestExecutionMetadata(ctx, nil)
 	if got := meta[coreexecutor.ExecutionSessionMetadataKey]; got != "session-1" {
 		t.Fatalf("ExecutionSessionMetadataKey = %v, want %q", got, "session-1")
 	}
@@ -81,7 +81,7 @@ func TestRequestExecutionMetadataIncludesHashedCallerScope(t *testing.T) {
 	ginCtx.Set("userApiKey", "downstream-secret")
 	ctx := context.WithValue(context.Background(), "gin", ginCtx)
 
-	meta := requestExecutionMetadata(ctx)
+	meta := requestExecutionMetadata(ctx, nil)
 	got, _ := meta[coreexecutor.CallerScopeMetadataKey].(string)
 	want := coresession.CallerScope("downstream-secret")
 	if got != want {
@@ -103,7 +103,7 @@ func TestRequestExecutionMetadataTraceCallbackWebsocketDetection(t *testing.T) {
 		logging.SetGinRequestID(ginCtx, "1234abcd")
 		ctx := context.WithValue(context.Background(), "gin", ginCtx)
 
-		meta := requestExecutionMetadata(ctx)
+		meta := requestExecutionMetadata(ctx, nil)
 
 		if _, exists := meta[coreexecutor.SelectedAuthIndexCallbackMetadataKey]; exists {
 			t.Fatal("unexpected selected auth index callback for websocket upgrade")
@@ -117,7 +117,7 @@ func TestRequestExecutionMetadataTraceCallbackWebsocketDetection(t *testing.T) {
 		logging.SetGinRequestID(ginCtx, "1234abcd")
 		ctx := context.WithValue(context.Background(), "gin", ginCtx)
 
-		meta := requestExecutionMetadata(ctx)
+		meta := requestExecutionMetadata(ctx, nil)
 
 		if _, exists := meta[coreexecutor.SelectedAuthIndexCallbackMetadataKey]; !exists {
 			t.Fatal("missing selected auth index callback for ordinary HTTP request")

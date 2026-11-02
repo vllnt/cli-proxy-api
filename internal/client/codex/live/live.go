@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -487,6 +488,17 @@ func mediaCredentialName(selected *auth.Auth, authIndex string) string {
 }
 
 func (h *Handler) selectOAuth(ctx context.Context, model string, opts coreexecutor.Options) (*auth.HomeDispatchSelection, *auth.Auth, error) {
+	// Every live selection honors the calling client API key's credential allowlist.
+	if cfg := h.currentConfig(); cfg != nil {
+		if restrictions := handlers.AuthSelectionMetadata(ctx, &cfg.SDKConfig); len(restrictions) > 0 {
+			merged := maps.Clone(opts.Metadata)
+			if merged == nil {
+				merged = make(map[string]any, len(restrictions))
+			}
+			maps.Copy(merged, restrictions)
+			opts.Metadata = merged
+		}
+	}
 	var selection *auth.HomeDispatchSelection
 	var selected *auth.Auth
 	var errSelect error

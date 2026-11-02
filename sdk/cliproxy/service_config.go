@@ -121,6 +121,14 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected config update with invalid credential weights")
 		return configCommit{}
 	}
+	if errValidate := newCfg.ValidateAPIKeyAuthAllowlist(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid api-key auth allowlist")
+		return configCommit{}
+	}
+	if errValidate := newCfg.ValidateHomeAPIKeyAuthAllowlist(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with api-key auth allowlist in Home mode")
+		return configCommit{}
+	}
 
 	s.cfgMu.Lock()
 	s.cfg = newCfg
@@ -195,6 +203,9 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 	if synthesizeConfigAuths {
 		s.registerConfigAPIKeyAuths(registrationCtx, cfg)
+	}
+	if s.coreManager != nil {
+		warnUnknownAPIKeyAllowlistAuthIDs(cfg, s.coreManager.List())
 	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false
@@ -312,4 +323,30 @@ func forceHomeRuntimeConfig(cfg *config.Config) {
 	cfg.RemoteManagement.AllowRemote = false
 	cfg.RemoteManagement.DisableControlPanel = true
 	cfg.Plugins.StoreAuth = nil
+}
+
+// warnUnknownAPIKeyAllowlistAuthIDs logs allowlist auth-ids that match no loaded credential.
+// An unknown id is not an error (the credential may load later); it only warns. The check is
+// skipped while no credential is loaded yet, as at startup, to avoid noise.
+func warnUnknownAPIKeyAllowlistAuthIDs(cfg *config.Config, auths []*coreauth.Auth) {
+	if cfg == nil || len(cfg.APIKeyAuthAllowlist) == 0 || len(auths) == 0 {
+		return
+	}
+	known := make(map[string]struct{}, len(auths))
+	for _, auth := range auths {
+		if auth != nil {
+			known[auth.ID] = struct{}{}
+		}
+	}
+	for label, entry := range cfg.APIKeyAuthAllowlist {
+		var unknown []string
+		for _, id := range entry.AuthIDs {
+			if _, ok := known[strings.TrimSpace(id)]; !ok {
+				unknown = append(unknown, id)
+			}
+		}
+		if len(unknown) > 0 {
+			log.Warnf("api-key-auth-allowlist %q lists auth-ids that match no loaded credential: %s", label, strings.Join(unknown, ", "))
+		}
+	}
 }
