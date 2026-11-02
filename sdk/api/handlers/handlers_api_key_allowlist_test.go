@@ -51,7 +51,7 @@ func TestRequestExecutionMetadataCarriesAPIKeyAllowlist(t *testing.T) {
 	t.Run("restricted key", func(t *testing.T) {
 		for name, withRequest := range map[string]bool{"with request": true, "gin context without request": false} {
 			meta := requestExecutionMetadata(ginContextForKey("test-key-monitor", withRequest), cfg)
-			restriction := coreexecutor.APIKeyAuthAllowlistFromMetadata(meta)
+			restriction := coreexecutor.AllowedAuthsFromMetadata(meta)
 			if restriction == nil {
 				t.Fatalf("%s: restricted key lost its restriction; metadata=%v", name, meta)
 			}
@@ -77,7 +77,7 @@ func TestRequestExecutionMetadataCarriesAPIKeyAllowlist(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			meta := requestExecutionMetadata(tt.ctx, tt.cfg)
-			if _, present := meta[coreexecutor.APIKeyAuthAllowlistMetadataKey]; present {
+			if _, present := meta[coreexecutor.AllowedAuthsMetadataKey]; present {
 				t.Fatalf("metadata must carry no restriction, got %v", meta)
 			}
 		})
@@ -85,18 +85,18 @@ func TestRequestExecutionMetadataCarriesAPIKeyAllowlist(t *testing.T) {
 
 	t.Run("live config snapshot", func(t *testing.T) {
 		ctx := ginContextForKey("test-key-monitor", true)
-		if coreexecutor.APIKeyAuthAllowlistFromMetadata(requestExecutionMetadata(ctx, cfg)) == nil {
+		if coreexecutor.AllowedAuthsFromMetadata(requestExecutionMetadata(ctx, cfg)) == nil {
 			t.Fatal("expected a restriction under the first snapshot")
 		}
 		reloaded := allowlistTestConfig()
 		reloaded.APIKeyAuthAllowlist = nil
-		if coreexecutor.APIKeyAuthAllowlistFromMetadata(requestExecutionMetadata(ctx, reloaded)) != nil {
+		if coreexecutor.AllowedAuthsFromMetadata(requestExecutionMetadata(ctx, reloaded)) != nil {
 			t.Fatal("removing the allowlist must lift the restriction on the next request")
 		}
 	})
 
 	t.Run("AuthSelectionMetadata", func(t *testing.T) {
-		if coreexecutor.APIKeyAuthAllowlistFromMetadata(AuthSelectionMetadata(ginContextForKey("test-key-monitor", true), cfg)) == nil {
+		if coreexecutor.AllowedAuthsFromMetadata(AuthSelectionMetadata(ginContextForKey("test-key-monitor", true), cfg)) == nil {
 			t.Fatal("direct selection metadata must carry the restriction")
 		}
 		if got := AuthSelectionMetadata(ginContextForKey("test-key-agents", true), cfg); len(got) != 0 {
@@ -292,7 +292,7 @@ func TestAuthSelectionMetadataPrefersTheRestrictionBoundAtAuthentication(t *test
 		"config with the key free": {APIKeys: []string{"retired-key"}},
 	} {
 		meta := AuthSelectionMetadata(ctx, cfg)
-		got := coreexecutor.APIKeyAuthAllowlistFromMetadata(meta)
+		got := coreexecutor.AllowedAuthsFromMetadata(meta)
 		if got == nil {
 			t.Fatalf("%s: bound restriction lost, metadata = %v", name, meta)
 		}
@@ -307,7 +307,7 @@ func TestAuthSelectionMetadataPrefersTheRestrictionBoundAtAuthentication(t *test
 	plain.Request = c.Request
 	plain.Set("userApiKey", "test-key-monitor")
 	live := allowlistTestConfig()
-	if coreexecutor.APIKeyAuthAllowlistFromMetadata(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", plain), live)) == nil {
+	if coreexecutor.AllowedAuthsFromMetadata(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", plain), live)) == nil {
 		t.Fatal("the live lookup no longer restricts a labelled key")
 	}
 	if len(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", plain), &sdkconfig.SDKConfig{APIKeys: live.APIKeys})) != 0 {
@@ -323,7 +323,7 @@ func TestAuthSelectionMetadataFailsClosedOnAMalformedBoundValue(t *testing.T) {
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		c.Set("userApiKey", "any-key")
 		c.Set(sdkaccess.CredentialAllowlistContextKey, bound)
-		got := coreexecutor.APIKeyAuthAllowlistFromMetadata(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", c), nil))
+		got := coreexecutor.AllowedAuthsFromMetadata(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", c), nil))
 		if got == nil || got.Allows("any.json", func(string) bool { return true }) {
 			t.Fatalf("%s: want an allowlist that allows nothing, got %+v", name, got)
 		}

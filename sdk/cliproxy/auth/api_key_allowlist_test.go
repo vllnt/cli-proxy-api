@@ -33,7 +33,7 @@ func (f *allowlistFixture) allowed() map[string]struct{} {
 
 func (f *allowlistFixture) opts() cliproxyexecutor.Options {
 	return cliproxyexecutor.Options{Metadata: map[string]any{
-		cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{f.id("a1")}, []string{"monitor-pool"}),
+		cliproxyexecutor.AllowedAuthsMetadataKey: cliproxyexecutor.NewAllowedAuths([]string{f.id("a1")}, []string{"monitor-pool"}),
 	}}
 }
 
@@ -186,11 +186,11 @@ func TestAuthHasTag(t *testing.T) {
 }
 
 func TestAuthSelectionEligibilityAPIKeyAllowlist(t *testing.T) {
-	byID := cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{"a.json"}, nil)
-	byTag := cliproxyexecutor.NewAPIKeyAuthAllowlist(nil, []string{"pool"})
-	union := cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{"a.json"}, []string{"pool"})
-	empty := cliproxyexecutor.NewAPIKeyAuthAllowlist(nil, nil)
-	blank := cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{" ", ""}, []string{" "})
+	byID := cliproxyexecutor.NewAllowedAuths([]string{"a.json"}, nil)
+	byTag := cliproxyexecutor.NewAllowedAuths(nil, []string{"pool"})
+	union := cliproxyexecutor.NewAllowedAuths([]string{"a.json"}, []string{"pool"})
+	empty := cliproxyexecutor.NewAllowedAuths(nil, nil)
+	blank := cliproxyexecutor.NewAllowedAuths([]string{" ", ""}, []string{" "})
 
 	tagged := &Auth{ID: "b.json", Provider: "codex", Attributes: map[string]string{"tags": "pool"}}
 	plain := &Auth{ID: "a.json", Provider: "codex"}
@@ -229,15 +229,15 @@ func TestAuthSelectionEligibilityAPIKeyAllowlist(t *testing.T) {
 	}
 }
 
-func TestAPIKeyAuthAllowlistFromMetadataFailsClosed(t *testing.T) {
-	if cliproxyexecutor.APIKeyAuthAllowlistFromMetadata(nil) != nil {
+func TestAllowedAuthsFromMetadataFailsClosed(t *testing.T) {
+	if cliproxyexecutor.AllowedAuthsFromMetadata(nil) != nil {
 		t.Fatal("nil metadata must be unrestricted")
 	}
-	if cliproxyexecutor.APIKeyAuthAllowlistFromMetadata(map[string]any{"other": 1}) != nil {
+	if cliproxyexecutor.AllowedAuthsFromMetadata(map[string]any{"other": 1}) != nil {
 		t.Fatal("metadata without the key must be unrestricted")
 	}
 	e := authSelectionEligibilityForRequest(context.Background(), cliproxyexecutor.Options{Metadata: map[string]any{
-		cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: "not-an-allowlist",
+		cliproxyexecutor.AllowedAuthsMetadataKey: "not-an-allowlist",
 	}})
 	if e.allowlist == nil || e.allows(&Auth{ID: "anything"}) {
 		t.Fatal("malformed restriction metadata must deny everything")
@@ -326,7 +326,7 @@ func TestAPIKeyAuthAllowlistEmptyEntryDeniesAll(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newAllowlistFixture(t, selector, "", nil)
 			opts := cliproxyexecutor.Options{Metadata: map[string]any{
-				cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: cliproxyexecutor.NewAPIKeyAuthAllowlist(nil, nil),
+				cliproxyexecutor.AllowedAuthsMetadataKey: cliproxyexecutor.NewAllowedAuths(nil, nil),
 			}}
 			_, _, err := f.manager.pickNext(context.Background(), f.provider, allowlistTestModel, opts, nil)
 			requireAllowlistUnavailable(t, err)
@@ -383,7 +383,7 @@ func TestAPIKeyAuthAllowlistMixedProviders(t *testing.T) {
 			f.register(t, secondProvider, secondPrefix)
 
 			opts := cliproxyexecutor.Options{Metadata: map[string]any{
-				cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{f.id("a1"), secondPrefix + "a1"}, nil),
+				cliproxyexecutor.AllowedAuthsMetadataKey: cliproxyexecutor.NewAllowedAuths([]string{f.id("a1"), secondPrefix + "a1"}, nil),
 			}}
 			providers := []string{f.provider, secondProvider}
 			seen := map[string]int{}
@@ -424,7 +424,7 @@ func TestAPIKeyAuthAllowlistSessionAffinityIgnoresDisallowedBinding(t *testing.T
 		other = f.id("a2")
 	}
 	opts := cliproxyexecutor.Options{Headers: headers, Metadata: map[string]any{
-		cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{other}, nil),
+		cliproxyexecutor.AllowedAuthsMetadataKey: cliproxyexecutor.NewAllowedAuths([]string{other}, nil),
 	}}
 	for range 5 {
 		picked, _, errPick := f.manager.pickNext(context.Background(), f.provider, allowlistTestModel, opts, nil)
@@ -526,7 +526,7 @@ func TestAPIKeyAuthAllowlistAntigravityCreditsFallbackStaysInsideAllowlist(t *te
 		executors: map[string]ProviderExecutor{"antigravity": schedulerTestExecutor{}},
 	}
 	opts := cliproxyexecutor.Options{Metadata: map[string]any{
-		cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{"ag-allowed"}, []string{"monitor-pool"}),
+		cliproxyexecutor.AllowedAuthsMetadataKey: cliproxyexecutor.NewAllowedAuths([]string{"ag-allowed"}, []string{"monitor-pool"}),
 	}}
 	candidates, err := m.findAllAntigravityCreditsCandidateAuths(context.Background(), "claude-sonnet-4-6", opts)
 	if err != nil {
@@ -550,7 +550,7 @@ func TestAPIKeyAuthAllowlistAntigravityCreditsFallbackStaysInsideAllowlist(t *te
 func TestAPIKeyAuthAllowlistHomeDispatchFailsClosed(t *testing.T) {
 	m := NewManager(nil, nil, nil)
 	opts := cliproxyexecutor.Options{Metadata: map[string]any{
-		cliproxyexecutor.APIKeyAuthAllowlistMetadataKey: cliproxyexecutor.NewAPIKeyAuthAllowlist([]string{"a"}, nil),
+		cliproxyexecutor.AllowedAuthsMetadataKey: cliproxyexecutor.NewAllowedAuths([]string{"a"}, nil),
 	}}
 	selection, err := m.pickHomeDispatchSelection(context.Background(), allowlistTestModel, opts)
 	if selection != nil {

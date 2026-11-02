@@ -80,7 +80,7 @@ type authSelectionEligibility struct {
 	credentialPolicy string
 	disallowFreeAuth bool
 	// allowlist restricts the request to the credentials its client API key may use; nil means no restriction.
-	allowlist *cliproxyexecutor.APIKeyAuthAllowlist
+	allowlist *cliproxyexecutor.AllowedAuths
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -102,7 +102,7 @@ func credentialPolicyFromContext(ctx context.Context) string {
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
 	eligibility := authSelectionEligibility{
 		disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata),
-		allowlist:        apiKeyAuthAllowlistFromOptions(opts),
+		allowlist:        allowedAuthsFromOptions(opts),
 	}
 	if ctx != nil {
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)

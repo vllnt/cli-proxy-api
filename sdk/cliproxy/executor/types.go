@@ -19,22 +19,22 @@ const RequestPathMetadataKey = "request_path"
 // DisallowFreeAuthMetadataKey instructs auth selection to skip known free-tier credentials.
 const DisallowFreeAuthMetadataKey = "disallow_free_auth"
 
-// APIKeyAuthAllowlistMetadataKey carries the *APIKeyAuthAllowlist that restricts auth
+// AllowedAuthsMetadataKey carries the *AllowedAuths that restricts auth
 // selection for the calling client API key. The key is absent for unrestricted requests.
-const APIKeyAuthAllowlistMetadataKey = "api_key_auth_allowlist"
+const AllowedAuthsMetadataKey = "allowed_auths"
 
-// APIKeyAuthAllowlist is an immutable set of credentials one client API key may use.
+// AllowedAuths is an immutable set of credentials one client API key may use.
 // A credential is allowed when its ID is listed or it carries one of the listed tags.
 // A list with neither IDs nor tags allows nothing.
-type APIKeyAuthAllowlist struct {
+type AllowedAuths struct {
 	authIDs map[string]struct{}
 	tags    []string
 }
 
-// NewAPIKeyAuthAllowlist copies the inputs into an immutable allowlist. Blank IDs and tags
+// NewAllowedAuths copies the inputs into an immutable allowlist. Blank IDs and tags
 // are ignored.
-func NewAPIKeyAuthAllowlist(authIDs, tags []string) *APIKeyAuthAllowlist {
-	list := &APIKeyAuthAllowlist{authIDs: make(map[string]struct{}, len(authIDs))}
+func NewAllowedAuths(authIDs, tags []string) *AllowedAuths {
+	list := &AllowedAuths{authIDs: make(map[string]struct{}, len(authIDs))}
 	for _, id := range authIDs {
 		if id = strings.TrimSpace(id); id != "" {
 			list.authIDs[id] = struct{}{}
@@ -50,7 +50,7 @@ func NewAPIKeyAuthAllowlist(authIDs, tags []string) *APIKeyAuthAllowlist {
 
 // Allows reports whether the credential is allowed. hasTag reports whether the credential
 // carries a tag; it may be nil.
-func (a *APIKeyAuthAllowlist) Allows(authID string, hasTag func(tag string) bool) bool {
+func (a *AllowedAuths) Allows(authID string, hasTag func(tag string) bool) bool {
 	if a == nil {
 		return true
 	}
@@ -68,17 +68,17 @@ func (a *APIKeyAuthAllowlist) Allows(authID string, hasTag func(tag string) bool
 	return false
 }
 
-// APIKeyAuthAllowlistFromMetadata returns the allowlist stored in Options.Metadata, or nil
+// AllowedAuthsFromMetadata returns the allowlist stored in Options.Metadata, or nil
 // when the request is unrestricted. A present but malformed value fails closed (allows nothing).
-func APIKeyAuthAllowlistFromMetadata(meta map[string]any) *APIKeyAuthAllowlist {
-	raw, ok := meta[APIKeyAuthAllowlistMetadataKey]
+func AllowedAuthsFromMetadata(meta map[string]any) *AllowedAuths {
+	raw, ok := meta[AllowedAuthsMetadataKey]
 	if !ok {
 		return nil
 	}
-	if list, ok := raw.(*APIKeyAuthAllowlist); ok && list != nil {
+	if list, ok := raw.(*AllowedAuths); ok && list != nil {
 		return list
 	}
-	return NewAPIKeyAuthAllowlist(nil, nil)
+	return NewAllowedAuths(nil, nil)
 }
 
 // AuthSelectionModelMetadataKey overrides the model used only for auth selection.

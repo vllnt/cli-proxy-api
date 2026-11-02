@@ -956,7 +956,7 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 		ctx = context.Background()
 	}
 	// Home picks credentials remotely, so an API key allowlist cannot be enforced: fail closed.
-	if apiKeyAuthAllowlistFromOptions(opts) != nil {
+	if allowedAuthsFromOptions(opts) != nil {
 		return nil, newAPIKeyAllowlistUnavailableError()
 	}
 
@@ -1286,7 +1286,7 @@ func (m *Manager) findAllAntigravityCreditsCandidateAuths(ctx context.Context, r
 	}
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	// Only the allowlist applies here: the credits fallback keeps ignoring the other eligibility rules.
-	eligibility := authSelectionEligibility{allowlist: apiKeyAuthAllowlistFromOptions(opts)}
+	eligibility := authSelectionEligibility{allowlist: allowedAuthsFromOptions(opts)}
 	var candidates []creditsCandidateEntry
 	m.mu.RLock()
 	for _, auth := range m.auths {

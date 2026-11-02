@@ -281,10 +281,10 @@ func addAPIKeyAuthAllowlistMetadata(meta map[string]any, ctx context.Context, cf
 	}
 	if bound, exists := ginCtx.Get(sdkaccess.CredentialAllowlistContextKey); exists {
 		if list, ok := bound.(*sdkaccess.CredentialAllowlist); ok && list != nil {
-			meta[coreexecutor.APIKeyAuthAllowlistMetadataKey] = coreexecutor.NewAPIKeyAuthAllowlist(list.AuthIDs, list.Tags)
+			meta[coreexecutor.AllowedAuthsMetadataKey] = coreexecutor.NewAllowedAuths(list.AuthIDs, list.Tags)
 		} else {
 			// A malformed bound value must never read as "unrestricted": allow nothing.
-			meta[coreexecutor.APIKeyAuthAllowlistMetadataKey] = coreexecutor.NewAPIKeyAuthAllowlist(nil, nil)
+			meta[coreexecutor.AllowedAuthsMetadataKey] = coreexecutor.NewAllowedAuths(nil, nil)
 		}
 		return
 	}
@@ -299,7 +299,7 @@ func addAPIKeyAuthAllowlistMetadata(meta map[string]any, ctx context.Context, cf
 	if !restricted {
 		return
 	}
-	meta[coreexecutor.APIKeyAuthAllowlistMetadataKey] = coreexecutor.NewAPIKeyAuthAllowlist(entry.AuthIDs, entry.Tags)
+	meta[coreexecutor.AllowedAuthsMetadataKey] = coreexecutor.NewAllowedAuths(entry.AuthIDs, entry.Tags)
 }
 
 func requestClientIP(request *http.Request) string {

@@ -84,6 +84,6 @@ func (e authSelectionEligibility) restrictPickError(ctx context.Context, provide
 	return newAPIKeyAllowlistUnavailableError()
 }
 
-func apiKeyAuthAllowlistFromOptions(opts cliproxyexecutor.Options) *cliproxyexecutor.APIKeyAuthAllowlist {
-	return cliproxyexecutor.APIKeyAuthAllowlistFromMetadata(opts.Metadata)
+func allowedAuthsFromOptions(opts cliproxyexecutor.Options) *cliproxyexecutor.AllowedAuths {
+	return cliproxyexecutor.AllowedAuthsFromMetadata(opts.Metadata)
 }

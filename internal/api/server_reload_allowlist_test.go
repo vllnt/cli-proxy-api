@@ -106,7 +106,7 @@ func TestReloadDoesNotUnrestrictAnInFlightRequest(t *testing.T) {
 		close(authenticated) // authenticated under the old configuration...
 		<-reloaded           // ...paused while a reload revokes the key...
 		ctx := context.WithValue(c.Request.Context(), "gin", c)
-		list := coreexecutor.APIKeyAuthAllowlistFromMetadata(handlers.AuthSelectionMetadata(ctx, server.handlers.Cfg)) // ...then selects a credential
+		list := coreexecutor.AllowedAuthsFromMetadata(handlers.AuthSelectionMetadata(ctx, server.handlers.Cfg)) // ...then selects a credential
 		var out outcome
 		if list != nil {
 			out.restricted = true
@@ -196,7 +196,7 @@ func TestRealtimeClientSecretKeepsTheIssuersAllowlistAcrossAReload(t *testing.T)
 	var got outcome
 	server.engine.GET("/realtime-probe", realtimeAuthMiddleware(server.accessManager, server.codexLiveHandler), func(c *gin.Context) {
 		ctx := context.WithValue(c.Request.Context(), "gin", c)
-		if list := coreexecutor.APIKeyAuthAllowlistFromMetadata(handlers.AuthSelectionMetadata(ctx, server.handlers.Cfg)); list != nil {
+		if list := coreexecutor.AllowedAuthsFromMetadata(handlers.AuthSelectionMetadata(ctx, server.handlers.Cfg)); list != nil {
 			got.restricted = true
 			for _, id := range []string{"claude-spare.json", "claude-other.json", "claude-agents.json"} {
 				if list.Allows(id, nil) {
