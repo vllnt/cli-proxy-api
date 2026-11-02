@@ -1740,7 +1740,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
-	defer func() { errPickNext = eligibility.restrictPickError(ctx, []string{provider}, model, errPickNext) }()
+	defer func() { errPickNext = eligibility.restrictPickError(ctx, []string{provider}, errPickNext) }()
 
 	m.mu.RLock()
 	selector := m.selector
@@ -2001,7 +2001,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		return m.pickNextLegacy(ctx, provider, model, opts, tried)
 	}
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
-	defer func() { errPickNext = eligibility.restrictPickError(ctx, []string{provider}, model, errPickNext) }()
+	defer func() { errPickNext = eligibility.restrictPickError(ctx, []string{provider}, errPickNext) }()
 	if strings.TrimSpace(model) != "" {
 		m.mu.RLock()
 		targetKey := canonicalSchedulingProvider(provider)
@@ -2060,7 +2060,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
-	defer func() { errPickNext = eligibility.restrictPickError(ctx, providers, model, errPickNext) }()
+	defer func() { errPickNext = eligibility.restrictPickError(ctx, providers, errPickNext) }()
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -2176,7 +2176,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 		return m.pickNextMixedLegacy(ctx, providers, model, opts, tried)
 	}
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
-	defer func() { errPickNext = eligibility.restrictPickError(ctx, providers, model, errPickNext) }()
+	defer func() { errPickNext = eligibility.restrictPickError(ctx, providers, errPickNext) }()
 
 	eligibleProviders := make([]string, 0, len(providers))
 	seenProviders := make(map[string]struct{}, len(providers))

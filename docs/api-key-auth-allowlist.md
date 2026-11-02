@@ -62,9 +62,9 @@ cooling down, disabled, already tried, or the entry is empty), the client gets:
 - error `code` `api_key_allowlist_unavailable`
 - message `no allowed account is currently available for this API key`
 
-The response names no key, label or account. The server log gets a warning with the request id,
-providers and model, never the key or its label. A request never falls through to a credential outside the allowlist, on
-retry, failover, cooldown wait or session affinity.
+The response names no key, label or account. The server log gets a warning with the request id and
+the providers, never the key, its label or the model. A request never falls through to a credential
+outside the allowlist, on retry, failover, cooldown wait or session affinity.
 
 If an allowed credential is tried and fails upstream, the client still sees that upstream error once
 the allowed credentials are exhausted, exactly as without an allowlist. The `503` is returned when

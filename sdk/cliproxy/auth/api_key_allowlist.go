@@ -72,7 +72,7 @@ func tagListContains(raw any, tag string) bool {
 // restrictPickError maps "nothing selectable" pick failures (no candidate, all cooling down)
 // of an allowlist-restricted request to the distinct allowlist error, so the client never
 // sees which accounts exist. Other errors and unrestricted requests pass through unchanged.
-func (e authSelectionEligibility) restrictPickError(ctx context.Context, providers []string, model string, err error) error {
+func (e authSelectionEligibility) restrictPickError(ctx context.Context, providers []string, err error) error {
 	if e.allowlist == nil || err == nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (e authSelectionEligibility) restrictPickError(ctx context.Context, provide
 	if !isAuthUnavailableError(err) && !(errors.As(err, &authErr) && authErr != nil && authErr.Code == "auth_not_found") {
 		return err
 	}
-	logEntryWithRequestID(ctx).Warnf("api-key allowlist: no allowed credential available | providers=%s model=%s", strings.Join(providers, ","), model)
+	logEntryWithRequestID(ctx).Warnf("api-key allowlist: no allowed credential available | providers=%s", strings.Join(providers, ","))
 	return newAPIKeyAllowlistUnavailableError()
 }
 
