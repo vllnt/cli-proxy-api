@@ -348,3 +348,38 @@ func TestWithRetiringAPIKeyRestrictions(t *testing.T) {
 		}
 	})
 }
+
+// The YAML the infrastructure repo renders (config/apps/cli-proxy-api/access_allowlist.py,
+// golden rendering in its tests): quoted labels, block lists with quoted items. Labels such as
+// "true" and "123" are quoted there so that they stay strings.
+func TestAPIKeyAuthAllowlistParsesTheRenderedBlockShape(t *testing.T) {
+	cfg, err := ParseConfigBytes([]byte(`
+access:
+  api-keys:
+    - "agents-key-value"
+    - "monitor-key-value"
+  api-key-labels:
+    "123": "agents-key-value"
+    "monitor": "monitor-key-value"
+  api-key-auth-allowlist:
+    "123":
+      tags:
+        - "agent-pool"
+    "monitor":
+      auth-ids:
+        - "claude-0123abcd.json"
+        - "codex-9f8e7d6c.json"
+      tags:
+        - "monitor-pool"
+`))
+	if err != nil {
+		t.Fatalf("ParseConfigBytes() error = %v", err)
+	}
+	label, entry, restricted := cfg.APIKeyAuthAllowlistFor("monitor-key-value")
+	if !restricted || label != "monitor" || !reflect.DeepEqual(entry.AuthIDs, []string{"claude-0123abcd.json", "codex-9f8e7d6c.json"}) || !reflect.DeepEqual(entry.Tags, []string{"monitor-pool"}) {
+		t.Fatalf("monitor: label=%q restricted=%v entry=%+v", label, restricted, entry)
+	}
+	if label, entry, restricted = cfg.APIKeyAuthAllowlistFor("agents-key-value"); !restricted || label != "123" || !reflect.DeepEqual(entry.Tags, []string{"agent-pool"}) {
+		t.Fatalf("numeric label: label=%q restricted=%v entry=%+v", label, restricted, entry)
+	}
+}
