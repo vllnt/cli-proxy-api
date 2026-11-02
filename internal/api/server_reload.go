@@ -163,15 +163,12 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	if exampleAPIKeySafeModeRequired {
 		s.exampleAPIKeySafeModeActive.Store(true)
 	}
-	// Publish the handlers' config (client key labels and their credential allowlists) around the
-	// access providers, with no cancellation check in between: a key must never be served under a
-	// policy older than the key itself. First the new policy plus the old restrictions of keys that
-	// are leaving (a new restricted key is not admitted yet, a revoked one still is), then the keys,
-	// then the new policy alone.
-	sdkConfig := effectiveSDKConfig(cfg)
-	s.handlers.UpdateClients(sdkConfig.WithRetiringAPIKeyRestrictions(s.handlers.Cfg))
+	// The access providers bind each admitted key's credential allowlist to the request, so the
+	// restriction of a key never depends on which configuration a later lookup sees. Requests that
+	// resolve the restriction at dispatch (a key the providers did not admit, e.g. a realtime client
+	// secret) read the handlers' config, so publish it before the providers admit new client keys.
+	s.handlers.UpdateClients(effectiveSDKConfig(cfg))
 	accessConfigApplied := s.applyAccessConfig(oldCfg, cfg)
-	s.handlers.UpdateClients(sdkConfig)
 	if accessConfigApplied || exampleAPIKeySafeModeRequired {
 		s.exampleAPIKeySafeModeActive.Store(exampleAPIKeySafeModeRequired)
 	}

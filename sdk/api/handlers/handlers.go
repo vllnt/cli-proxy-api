@@ -20,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	coresession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
@@ -264,15 +265,30 @@ func AuthSelectionMetadata(ctx context.Context, cfg *config.SDKConfig) map[strin
 	return meta
 }
 
-// addAPIKeyAuthAllowlistMetadata resolves the calling client API key (gin key "userApiKey")
-// to its label and allowlist in the live config and stores the restriction in meta.
-// Requests without a resolved key, a label, or an allowlist entry stay unrestricted.
+// addAPIKeyAuthAllowlistMetadata stores the calling client key's credential restriction in meta.
+// The restriction bound to the principal at authentication (gin key
+// sdkaccess.CredentialAllowlistContextKey) wins: it comes from the configuration that admitted
+// the key, so a reload between authentication and selection cannot change it. Without one, the
+// key (gin key "userApiKey") is resolved to its label and allowlist in cfg. Requests without a
+// resolved key, a label, or an allowlist entry stay unrestricted.
 func addAPIKeyAuthAllowlistMetadata(meta map[string]any, ctx context.Context, cfg *config.SDKConfig) {
-	if meta == nil || ctx == nil || cfg == nil || len(cfg.APIKeyAuthAllowlist) == 0 {
+	if meta == nil || ctx == nil {
 		return
 	}
 	ginCtx, ok := ctx.Value("gin").(*gin.Context)
 	if !ok || ginCtx == nil {
+		return
+	}
+	if bound, exists := ginCtx.Get(sdkaccess.CredentialAllowlistContextKey); exists {
+		if list, ok := bound.(*sdkaccess.CredentialAllowlist); ok && list != nil {
+			meta[coreexecutor.APIKeyAuthAllowlistMetadataKey] = coreexecutor.NewAPIKeyAuthAllowlist(list.Label, list.AuthIDs, list.Tags)
+		} else {
+			// A malformed bound value must never read as "unrestricted": allow nothing.
+			meta[coreexecutor.APIKeyAuthAllowlistMetadataKey] = coreexecutor.NewAPIKeyAuthAllowlist("", nil, nil)
+		}
+		return
+	}
+	if cfg == nil || len(cfg.APIKeyAuthAllowlist) == 0 {
 		return
 	}
 	value, exists := ginCtx.Get("userApiKey")

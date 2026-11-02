@@ -24,16 +24,39 @@ func Register(cfg *sdkconfig.SDKConfig) {
 
 	sdkaccess.RegisterProvider(
 		sdkaccess.AccessProviderTypeConfigAPIKey,
-		newProvider(sdkaccess.DefaultAccessProviderName, keys),
+		newProvider(sdkaccess.DefaultAccessProviderName, keys, credentialAllowlists(cfg, keys)),
 	)
 }
 
-type provider struct {
-	name string
-	keys map[string]struct{}
+// credentialAllowlists resolves, per client key, the credential allowlist in cfg. The provider
+// keeps its own copy, so it answers for the configuration that admitted the key even after a
+// later reload.
+func credentialAllowlists(cfg *sdkconfig.SDKConfig, keys []string) map[string]sdkaccess.CredentialAllowlist {
+	var lists map[string]sdkaccess.CredentialAllowlist
+	for _, key := range keys {
+		label, entry, restricted := cfg.APIKeyAuthAllowlistFor(key)
+		if !restricted {
+			continue
+		}
+		if lists == nil {
+			lists = make(map[string]sdkaccess.CredentialAllowlist)
+		}
+		lists[key] = sdkaccess.CredentialAllowlist{
+			Label:   label,
+			AuthIDs: append([]string{}, entry.AuthIDs...),
+			Tags:    append([]string{}, entry.Tags...),
+		}
+	}
+	return lists
 }
 
-func newProvider(name string, keys []string) *provider {
+type provider struct {
+	name      string
+	keys      map[string]struct{}
+	allowlist map[string]sdkaccess.CredentialAllowlist
+}
+
+func newProvider(name string, keys []string, allowlist map[string]sdkaccess.CredentialAllowlist) *provider {
 	providerName := strings.TrimSpace(name)
 	if providerName == "" {
 		providerName = sdkaccess.DefaultAccessProviderName
@@ -42,7 +65,7 @@ func newProvider(name string, keys []string) *provider {
 	for _, key := range keys {
 		keySet[key] = struct{}{}
 	}
-	return &provider{name: providerName, keys: keySet}
+	return &provider{name: providerName, keys: keySet, allowlist: allowlist}
 }
 
 func (p *provider) Identifier() string {
@@ -96,11 +119,23 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 				Metadata: map[string]string{
 					"source": candidate.source,
 				},
+				CredentialAllowlist: p.credentialAllowlist(candidate.value),
 			}, nil
 		}
 	}
 
 	return nil, sdkaccess.NewInvalidCredentialError()
+}
+
+// credentialAllowlist returns a private copy of the key's allowlist, or nil when the key is unrestricted.
+func (p *provider) credentialAllowlist(key string) *sdkaccess.CredentialAllowlist {
+	list, ok := p.allowlist[key]
+	if !ok {
+		return nil
+	}
+	list.AuthIDs = append([]string{}, list.AuthIDs...)
+	list.Tags = append([]string{}, list.Tags...)
+	return &list
 }
 
 func extractBearerToken(header string) string {

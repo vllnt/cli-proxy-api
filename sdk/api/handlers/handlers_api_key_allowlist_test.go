@@ -13,6 +13,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -274,5 +275,60 @@ func TestRestrictedKeyModelErrors(t *testing.T) {
 	_, _, elsewhere := handler.ExecuteWithAuthManager(ctx, "openai", servedElsewhere, []byte(`{}`), "")
 	if status, code := errorCode(elsewhere); status != http.StatusServiceUnavailable || code != "api_key_allowlist_unavailable" {
 		t.Fatalf("model served only outside the allowlist: got %d %q, want 503 api_key_allowlist_unavailable", status, code)
+	}
+}
+
+// The restriction bound to the authenticated principal wins over a later lookup: a request
+// admitted under a configuration that restricted its key keeps that restriction even when the
+// configuration it is dispatched under no longer names the key.
+func TestAuthSelectionMetadataPrefersTheRestrictionBoundAtAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set("userApiKey", "retired-key")
+	c.Set(sdkaccess.CredentialAllowlistContextKey, &sdkaccess.CredentialAllowlist{Label: "monitor", AuthIDs: []string{"ak-allowed.json"}, Tags: []string{"monitor-pool"}})
+	ctx := context.WithValue(context.Background(), "gin", c)
+
+	for name, cfg := range map[string]*sdkconfig.SDKConfig{
+		"nil config":               nil,
+		"config without the key":   {APIKeys: []string{"other"}},
+		"config with the key free": {APIKeys: []string{"retired-key"}},
+	} {
+		meta := AuthSelectionMetadata(ctx, cfg)
+		got := coreexecutor.APIKeyAuthAllowlistFromMetadata(meta)
+		if got == nil || got.Label() != "monitor" {
+			t.Fatalf("%s: bound restriction lost, metadata = %v", name, meta)
+		}
+		hasTag := func(tag string) bool { return tag == "monitor-pool" }
+		if !got.Allows("ak-allowed.json", nil) || !got.Allows("x", hasTag) || got.Allows("other.json", nil) {
+			t.Fatalf("%s: wrong allow set %+v", name, got)
+		}
+	}
+
+	// Without a bound restriction the live configuration decides, as before.
+	plain, _ := gin.CreateTestContext(httptest.NewRecorder())
+	plain.Request = c.Request
+	plain.Set("userApiKey", "test-key-monitor")
+	live := allowlistTestConfig()
+	if coreexecutor.APIKeyAuthAllowlistFromMetadata(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", plain), live)) == nil {
+		t.Fatal("the live lookup no longer restricts a labelled key")
+	}
+	if len(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", plain), &sdkconfig.SDKConfig{APIKeys: live.APIKeys})) != 0 {
+		t.Fatal("an unrestricted key gained metadata")
+	}
+}
+
+// A bound value that is not a credential allowlist must fail closed, never read as unrestricted.
+func TestAuthSelectionMetadataFailsClosedOnAMalformedBoundValue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for name, bound := range map[string]any{"wrong type": "monitor", "typed nil": (*sdkaccess.CredentialAllowlist)(nil)} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		c.Set("userApiKey", "any-key")
+		c.Set(sdkaccess.CredentialAllowlistContextKey, bound)
+		got := coreexecutor.APIKeyAuthAllowlistFromMetadata(AuthSelectionMetadata(context.WithValue(context.Background(), "gin", c), nil))
+		if got == nil || got.Allows("any.json", func(string) bool { return true }) {
+			t.Fatalf("%s: want an allowlist that allows nothing, got %+v", name, got)
+		}
 	}
 }

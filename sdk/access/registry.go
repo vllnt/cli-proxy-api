@@ -18,7 +18,25 @@ type Result struct {
 	Provider  string
 	Principal string
 	Metadata  map[string]string
+
+	// CredentialAllowlist, when set, restricts the authenticated principal to the listed
+	// upstream credentials. A provider fills it from the same configuration snapshot that
+	// admitted the principal, so a request is never admitted under one configuration and
+	// restricted under another.
+	CredentialAllowlist *CredentialAllowlist
 }
+
+// CredentialAllowlist names the upstream credentials a principal may use: those whose ID is
+// in AuthIDs or that carry one of Tags. Label is for server logs only.
+type CredentialAllowlist struct {
+	Label   string
+	AuthIDs []string
+	Tags    []string
+}
+
+// CredentialAllowlistContextKey is the gin context key under which the request middleware
+// stores the authenticated principal's *CredentialAllowlist (absent when unrestricted).
+const CredentialAllowlistContextKey = "credentialAllowlist"
 
 var (
 	registryMu        sync.RWMutex

@@ -96,18 +96,23 @@ fails with the `503` above instead of becoming unrestricted.
   allowlist, never keys, labels' keys or auth IDs.
 - Config reload re-reads the allowlist for every new request. An invalid file is rejected and the
   last valid configuration (including its allowlist) stays in force.
-- A reload never serves a key under a policy older than the key. It publishes the new labels and
-  allowlists to the request handlers together with the old restrictions of keys that are leaving,
-  then switches the client keys, then publishes the new configuration alone, with no cancellation
-  point in between. A newly added restricted key is therefore restricted from its first request, and
-  a key being revoked stays restricted until it is no longer admitted. A key that stays listed follows
-  the new configuration at once: removing its label or entry takes effect from the next dispatch.
-  A request resolves its restriction when it is dispatched, from the configuration then in force.
+- A key's restriction travels with its authentication. The access provider that admits a client
+  key returns the key's allowlist from the same configuration snapshot, and the request keeps it for
+  its whole life. A reload therefore cannot admit a key under one policy and dispatch it under
+  another: a newly added restricted key is restricted from its first request, and a request
+  authenticated before its key was revoked, rotated or relabelled finishes under the restriction it
+  was admitted with. A key that is still listed follows the new configuration from its next request.
+- Requests that resolve the restriction at dispatch, because no provider bound one (a key the
+  config provider did not admit, such as a Realtime client secret minted by a restricted key), read
+  the live configuration, which a reload publishes before it admits new client keys.
 
 ## Limits
 
 - Only requests whose client key is listed in `api-keys` can be labelled. Principals from other
   access providers have no label and keep full access.
+- A Realtime client secret resolves its issuer key's restriction at dispatch from the live
+  configuration (see above). If the issuer key is revoked or relabelled while the secret is valid, the
+  secret's requests follow the live configuration, which no longer restricts that key.
 - `/v1/models` is not filtered: it lists the models of all loaded credentials. A restricted key can
   see a model that none of its allowed credentials serves; the request then returns the `503`.
 - When a model is served only by credentials outside the allowlist, a restricted key gets

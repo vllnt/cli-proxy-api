@@ -7,8 +7,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
@@ -60,6 +62,9 @@ func TestReloadNeverAdmitsAKeyBeforeItsAllowlist(t *testing.T) {
 		result, err := server.accessManager.Authenticate(context.Background(), request)
 		admitted := err == nil && result != nil
 		_, _, restricted := server.handlers.Cfg.APIKeyAuthAllowlistFor("monitor-key")
+		if admitted && result.CredentialAllowlist == nil {
+			t.Fatalf("reload cut after %d cancellation checks: monitor-key is admitted without its allowlist bound to the request", allowed)
+		}
 		if admitted && !restricted {
 			t.Fatalf("reload cut after %d cancellation checks: monitor-key is admitted but the handlers have no allowlist for it", allowed)
 		}
@@ -69,32 +74,11 @@ func TestReloadNeverAdmitsAKeyBeforeItsAllowlist(t *testing.T) {
 	}
 }
 
-// observeProvider is an access provider that never authenticates anyone. A reload asks every
-// registered provider for its identifier after it has published the new handlers config and
-// before the access manager switches to the new client keys, which is the window under test.
-type observeProvider struct {
-	inWindow func()
-}
-
-func (p *observeProvider) Identifier() string {
-	if fn := p.inWindow; fn != nil {
-		p.inWindow = nil
-		fn()
-	}
-	return "test-observer"
-}
-
-func (p *observeProvider) Authenticate(context.Context, *http.Request) (*sdkaccess.Result, *sdkaccess.AuthError) {
-	return nil, sdkaccess.NewNotHandledError()
-}
-
-// A key that a reload revokes must not be served unrestricted in the instant between the new
-// handlers config and the new access providers: the access manager still admits it then.
-func TestReloadKeepsARetiringKeyRestrictedUntilAccessStopsAdmittingIt(t *testing.T) {
-	observer := &observeProvider{}
-	sdkaccess.RegisterProvider("test-observer", observer)
-	t.Cleanup(func() { sdkaccess.UnregisterProvider("test-observer") })
-
+// A request that authenticated as a restricted key keeps that restriction for its whole life,
+// even when a reload that revokes the key completes before the request selects a credential:
+// the old configuration restricts the key and the new one rejects it, so no state in between may
+// serve it unrestricted.
+func TestReloadDoesNotUnrestrictAnInFlightRequest(t *testing.T) {
 	server := newTestServer(t)
 	withMonitor := func(key string, ids ...string) *proxyconfig.Config {
 		next := *server.cfg
@@ -109,42 +93,60 @@ func TestReloadKeepsARetiringKeyRestrictedUntilAccessStopsAdmittingIt(t *testing
 		t.Fatal("initial reload failed")
 	}
 
-	type seen struct{ admitted, restricted bool }
-	inWindow := map[string]seen{}
-	observer.inWindow = func() {
-		for _, key := range []string{"monitor-key-a", "monitor-key-b"} {
-			request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-			request.Header.Set("Authorization", "Bearer "+key)
-			result, err := server.accessManager.Authenticate(context.Background(), request)
-			_, _, restricted := server.handlers.Cfg.APIKeyAuthAllowlistFor(key)
-			inWindow[key] = seen{admitted: err == nil && result != nil, restricted: restricted}
-		}
+	authenticated := make(chan struct{})
+	reloaded := make(chan struct{})
+	type outcome struct {
+		restricted bool
+		allowed    []string
 	}
+	got := make(chan outcome, 1)
+	server.engine.GET("/in-flight", AuthMiddleware(server.accessManager), func(c *gin.Context) {
+		close(authenticated) // authenticated under the old configuration...
+		<-reloaded           // ...paused while a reload revokes the key...
+		ctx := context.WithValue(c.Request.Context(), "gin", c)
+		list := coreexecutor.APIKeyAuthAllowlistFromMetadata(handlers.AuthSelectionMetadata(ctx, server.handlers.Cfg)) // ...then selects a credential
+		var out outcome
+		if list != nil {
+			out.restricted = true
+			for _, id := range []string{"claude-spare.json", "claude-other.json", "claude-agents.json"} {
+				if list.Allows(id, nil) {
+					out.allowed = append(out.allowed, id)
+				}
+			}
+		}
+		got <- out
+		c.Status(http.StatusOK)
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/in-flight", nil)
+	request.Header.Set("Authorization", "Bearer monitor-key-a")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.engine.ServeHTTP(httptest.NewRecorder(), request)
+	}()
+	<-authenticated
 	if !server.UpdateClientsContext(context.Background(), withMonitor("monitor-key-b", "claude-other.json")) {
 		t.Fatal("rotation reload failed")
 	}
+	close(reloaded)
+	<-done
 
-	if len(inWindow) != 2 {
-		t.Fatalf("the window was not observed: %v", inWindow)
-	}
-	if got := inWindow["monitor-key-a"]; !got.admitted || !got.restricted {
-		t.Fatalf("revoked key in the window: admitted=%v restricted=%v, want admitted and restricted", got.admitted, got.restricted)
-	}
-	if got := inWindow["monitor-key-b"]; got.admitted {
-		t.Fatalf("new key admitted before the access providers switched: %+v", got)
+	out := <-got
+	if !out.restricted || len(out.allowed) != 1 || out.allowed[0] != "claude-spare.json" {
+		t.Fatalf("in-flight request after the key was revoked: restricted=%v allowed=%v, want restricted to claude-spare.json", out.restricted, out.allowed)
 	}
 
-	// After the reload: the old key is rejected, the new one is admitted under the new entry, and
-	// the handlers hold exactly the new config (no leftover restriction for the retired key).
-	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	request.Header.Set("Authorization", "Bearer monitor-key-a")
-	if result, err := server.accessManager.Authenticate(context.Background(), request); err == nil && result != nil {
-		t.Fatal("revoked key is still admitted after the reload")
-	}
-	if _, entry, ok := server.handlers.Cfg.APIKeyAuthAllowlistFor("monitor-key-b"); !ok || len(entry.AuthIDs) != 1 || entry.AuthIDs[0] != "claude-other.json" {
-		t.Fatalf("new key after the reload: restricted=%v entry=%+v", ok, entry)
-	}
-	if _, _, ok := server.handlers.Cfg.APIKeyAuthAllowlistFor("monitor-key-a"); ok {
-		t.Fatal("the handlers still carry the retired key's restriction after the reload")
+	// New requests: the revoked key is rejected, the new key is admitted under the new entry.
+	for key, want := range map[string]int{"monitor-key-a": http.StatusUnauthorized, "monitor-key-b": http.StatusOK} {
+		next := httptest.NewRequest(http.MethodGet, "/models-probe", nil)
+		next.Header.Set("Authorization", "Bearer "+key)
+		recorder := httptest.NewRecorder()
+		server.engine.GET("/models-probe-"+key, AuthMiddleware(server.accessManager), func(c *gin.Context) { c.Status(http.StatusOK) })
+		next.URL.Path = "/models-probe-" + key
+		server.engine.ServeHTTP(recorder, next)
+		if recorder.Code != want {
+			t.Fatalf("%s after the reload: status %d, want %d", key, recorder.Code, want)
+		}
 	}
 }

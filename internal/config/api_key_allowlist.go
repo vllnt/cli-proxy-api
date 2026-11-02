@@ -36,51 +36,6 @@ func (c *SDKConfig) APIKeyAuthAllowlistFor(apiKey string) (label string, entry A
 	return "", APIKeyAuthAllowlist{}, false
 }
 
-// WithRetiringAPIKeyRestrictions returns c plus the restrictions previous applied to client keys
-// that c no longer lists. A reload publishes it while the access providers still admit those keys,
-// so a key that is being revoked is never served unrestricted in between; the reload then
-// publishes c itself. A key that stays listed follows c at once. It returns c itself when nothing
-// is retiring and never modifies c or previous. The carried labels exist only in the returned
-// value and are not valid configuration.
-func (c *SDKConfig) WithRetiringAPIKeyRestrictions(previous *SDKConfig) *SDKConfig {
-	if c == nil || previous == nil || len(previous.APIKeyAuthAllowlist) == 0 {
-		return c
-	}
-	listed := make(map[string]struct{}, len(c.APIKeys))
-	for _, key := range c.APIKeys {
-		listed[strings.TrimSpace(key)] = struct{}{}
-	}
-	var merged *SDKConfig
-	for _, label := range sortedKeys(previous.APIKeyAuthAllowlist) {
-		key := strings.TrimSpace(previous.APIKeyLabels[label])
-		if _, stillListed := listed[key]; key == "" || stillListed {
-			continue
-		}
-		if merged == nil {
-			copied := *c
-			copied.APIKeyLabels = make(map[string]string, len(c.APIKeyLabels)+1)
-			for name, value := range c.APIKeyLabels {
-				copied.APIKeyLabels[name] = value
-			}
-			copied.APIKeyAuthAllowlist = make(map[string]APIKeyAuthAllowlist, len(c.APIKeyAuthAllowlist)+1)
-			for name, entry := range c.APIKeyAuthAllowlist {
-				copied.APIKeyAuthAllowlist[name] = entry
-			}
-			merged = &copied
-		}
-		carried := label + " (retiring)"
-		for _, taken := merged.APIKeyLabels[carried]; taken; _, taken = merged.APIKeyLabels[carried] {
-			carried += "!"
-		}
-		merged.APIKeyLabels[carried] = key
-		merged.APIKeyAuthAllowlist[carried] = previous.APIKeyAuthAllowlist[label]
-	}
-	if merged == nil {
-		return c
-	}
-	return merged
-}
-
 // ValidateAPIKeyAuthAllowlist checks api-key-labels and api-key-auth-allowlist.
 // Errors name labels only and never contain a key value.
 func (c *SDKConfig) ValidateAPIKeyAuthAllowlist() error {
