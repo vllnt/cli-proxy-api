@@ -28,15 +28,17 @@ func newRecordingRealtimeUpstream(t *testing.T) *recordingRealtimeUpstream {
 	t.Helper()
 	upstream := &recordingRealtimeUpstream{}
 	upstream.Server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// Record before the upgrade: the 101 reaches the proxy first, so a handshake that was made and then
+		// followed by a refusal would otherwise race with the assertion that nothing was dialed.
+		upstream.mu.Lock()
+		upstream.tokens = append(upstream.tokens, strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+		upstream.mu.Unlock()
 		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 		connection, errUpgrade := upgrader.Upgrade(writer, request, nil)
 		if errUpgrade != nil {
 			return
 		}
 		defer func() { _ = connection.Close() }()
-		upstream.mu.Lock()
-		upstream.tokens = append(upstream.tokens, strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
-		upstream.mu.Unlock()
 		_ = connection.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.created"}`))
 	}))
 	t.Cleanup(upstream.Close)
@@ -156,7 +158,7 @@ func TestRealtimeWebsocketEntryPointsHonorTheAllowlist(t *testing.T) {
 
 			got := upstream.handshakes()
 			if len(tt.wantToken) == 0 {
-				if status != http.StatusServiceUnavailable || !strings.Contains(body, "no allowed account is currently available") {
+				if status != http.StatusServiceUnavailable || !strings.Contains(body, "no allowed account is currently available for this API key") {
 					t.Fatalf("refusal = %d %q, want 503 with the allowlist message", status, body)
 				}
 				if len(got) != 0 {
