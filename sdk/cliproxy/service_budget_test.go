@@ -209,6 +209,10 @@ func (s stalledKV) KVIncrBy(context.Context, string, int64) (int64, error) {
 	return 0, nil
 }
 
+// KVExpire completes the flush of an abandoned write once the store is released, instead of panicking on
+// the embedded nil client and logging into whichever test runs next.
+func (s stalledKV) KVExpire(context.Context, string, time.Duration) (bool, error) { return true, nil }
+
 func chargeBudgetRecord(engine *budget.Engine, tokens int64) {
 	_, ticket := engine.Admit(budgetServiceKey, "claude-fable-5")
 	engine.HandleUsage(budget.WithTicket(context.Background(), ticket), usage.Record{
@@ -326,12 +330,19 @@ func shutdownLogs(t *testing.T) *logrustest.Hook {
 	return hook
 }
 
-// requireNoShutdownWarnings fails when shutdown warned about usage or budgets.
+// requireNoShutdownWarnings fails when shutdown logged one of its usage or budget warnings. It matches
+// those messages only, so a goroutine another test left behind cannot fail this one.
 func requireNoShutdownWarnings(t *testing.T, hook *logrustest.Hook) {
 	t.Helper()
 	for _, entry := range hook.AllEntries() {
-		if entry.Level <= log.WarnLevel && (strings.Contains(entry.Message, "budget") || strings.Contains(entry.Message, "usage records")) {
-			t.Fatalf("shutdown logged a warning although there was nothing to flush: %q", entry.Message)
+		for _, warning := range []string{
+			"usage records were still queued at shutdown",
+			"failed to flush api-key budget counters",
+			"api-key budget flush did not finish",
+		} {
+			if strings.Contains(entry.Message, warning) {
+				t.Fatalf("shutdown logged a warning although there was nothing to flush: %q", entry.Message)
+			}
 		}
 	}
 }
