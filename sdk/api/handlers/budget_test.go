@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -449,5 +450,46 @@ func waitForBudgetRemaining(t *testing.T, engine *budget.Engine, apiKey, model s
 			t.Fatalf("remaining tokens = %d, want %d", dec.RemainingTokens, want)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestWriteBudgetError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	exhausted := &budget.ExhaustedError{
+		Label: "team-x", Pattern: "claude-fable-*", Window: "day",
+		ResetAt: budgetNoon.Add(12 * time.Hour), RetryAfter: 12 * time.Hour,
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	if !WriteBudgetError(c, fmt.Errorf("selecting a credential: %w", exhausted)) {
+		t.Fatal("WriteBudgetError() = false, want true for a wrapped budget error")
+	}
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", recorder.Code)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "43200" {
+		t.Fatalf("Retry-After = %q, want 43200", got)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("Content-Type = %q, want JSON", got)
+	}
+	var body struct {
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Error.Type != "rate_limit_error" || body.Error.Code != "budget_exhausted" {
+		t.Fatalf("body = %s (%v), want the budget_exhausted error", recorder.Body.String(), err)
+	}
+
+	other := httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(other)
+	if WriteBudgetError(c, errors.New("upstream unavailable")) || WriteBudgetError(c, nil) || WriteBudgetError(nil, exhausted) {
+		t.Fatal("WriteBudgetError() = true for something that is not a budget error on a usable context")
+	}
+	if other.Body.Len() != 0 || other.Code != http.StatusOK {
+		t.Fatalf("a non-budget error must write nothing, got %d %q", other.Code, other.Body.String())
 	}
 }

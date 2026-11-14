@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/budget"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -853,15 +852,13 @@ func writeLiveError(c *gin.Context, status int, message string) {
 }
 
 func writeSelectionError(c *gin.Context, err error) {
+	// A budget error is already a client-ready JSON error body; keep its code on every route.
+	if handlers.WriteBudgetError(c, err) {
+		return
+	}
 	status := clienterror.HTTPStatusFromErrorOr(err, http.StatusServiceUnavailable)
 	for _, value := range auth.SafeResponseHeaders(err).Values("Retry-After") {
 		c.Writer.Header().Add("Retry-After", value)
-	}
-	var exhausted *budget.ExhaustedError
-	if errors.As(err, &exhausted) {
-		// A budget error is already a client-ready JSON error body; keep its code on every route.
-		c.Data(status, "application/json", []byte(err.Error()))
-		return
 	}
 	writeLiveError(c, status, err.Error())
 }

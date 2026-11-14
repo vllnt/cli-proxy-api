@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -67,4 +68,19 @@ func setBudgetHeaders(ctx context.Context, decision budget.Decision) {
 	header.Set(budgetRemainingHeader, strconv.FormatInt(max(decision.RemainingTokens, 0), 10))
 	header.Set(budgetResetHeader, decision.ResetAt.UTC().Format(time.RFC3339))
 	header.Set(budgetModeHeader, decision.Mode)
+}
+
+// WriteBudgetError answers err as a rejected token budget: HTTP 429, Retry-After and the JSON error
+// body. Code that selects a credential itself uses it for the error AdmitBudget produced. It reports
+// false and writes nothing when err is not a budget error.
+func WriteBudgetError(c *gin.Context, err error) bool {
+	var exhausted *budget.ExhaustedError
+	if c == nil || !errors.As(err, &exhausted) {
+		return false
+	}
+	for _, value := range exhausted.SafeResponseHeaders().Values("Retry-After") {
+		c.Writer.Header().Set("Retry-After", value)
+	}
+	c.Data(exhausted.StatusCode(), "application/json", []byte(exhausted.Error()))
+	return true
 }
