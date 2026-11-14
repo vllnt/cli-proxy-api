@@ -641,10 +641,13 @@ type Manager struct {
 	stopOnce sync.Once
 	cancel   context.CancelFunc
 
-	mu     sync.Mutex
-	cond   *sync.Cond
-	queue  []queueItem
-	closed bool
+	mu      sync.Mutex
+	cond    *sync.Cond
+	queue   []queueItem
+	closed  bool
+	started bool
+	// done is closed when the dispatcher goroutine has delivered the queue after Stop and exited.
+	done chan struct{}
 
 	pluginsMu sync.RWMutex
 	plugins   []Plugin
@@ -653,7 +656,7 @@ type Manager struct {
 
 // NewManager constructs a manager with a buffered queue.
 func NewManager(buffer int) *Manager {
-	m := &Manager{}
+	m := &Manager{done: make(chan struct{})}
 	m.cond = sync.NewCond(&m.mu)
 	return m
 }
@@ -669,8 +672,32 @@ func (m *Manager) Start(ctx context.Context) {
 		}
 		var workerCtx context.Context
 		workerCtx, m.cancel = context.WithCancel(ctx)
+		m.mu.Lock()
+		m.started = true
+		m.mu.Unlock()
 		go m.run(workerCtx)
 	})
+}
+
+// WaitStopped waits until the dispatcher has delivered every record queued before Stop and exited, or
+// until ctx ends. It reports whether the dispatcher finished. Call it after Stop; before Stop it only
+// returns when ctx ends. A manager whose dispatcher never started has nothing to wait for.
+func (m *Manager) WaitStopped(ctx context.Context) bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	started := m.started
+	m.mu.Unlock()
+	if !started {
+		return true
+	}
+	select {
+	case <-m.done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // Stop stops the dispatcher and drains the queue.
@@ -782,6 +809,7 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 }
 
 func (m *Manager) run(ctx context.Context) {
+	defer close(m.done)
 	for {
 		m.mu.Lock()
 		for !m.closed && len(m.queue) == 0 {

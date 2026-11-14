@@ -162,17 +162,153 @@ func TestShutdownFlushesPendingBudgetUsage(t *testing.T) {
 	if err := restarted.Apply(&cfg.SDKConfig); err != nil {
 		t.Fatal(err)
 	}
-	// The persisted total is read in the background, so the first admissions still see the full limit.
+	requireRemainingAfterRestart(t, withStore, cfg, 1_300_000, "Shutdown did not flush pending usage")
+}
+
+// requireRemainingAfterRestart starts a fresh engine over the same store, as a new process would, and
+// waits for it to report want tokens left. The persisted total is read in the background, so the first
+// admissions still see the full limit.
+func requireRemainingAfterRestart(t *testing.T, withStore budget.Option, cfg *internalconfig.Config, want int64, why string) {
+	t.Helper()
+	restarted := budget.New(withStore)
+	if err := restarted.Apply(&cfg.SDKConfig); err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		dec, _ := restarted.Admit(budgetServiceKey, "claude-fable-5")
-		if dec.RemainingTokens == 1_300_000 {
+		if dec.RemainingTokens == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("remaining after restart = %d, want 1300000: Shutdown did not flush pending usage", dec.RemainingTokens)
+			t.Fatalf("remaining after restart = %d, want %d: %s", dec.RemainingTokens, want, why)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// blockingUsagePlugin holds every record until gate is closed.
+type blockingUsagePlugin struct{ gate chan struct{} }
+
+func (p blockingUsagePlugin) HandleUsage(context.Context, usage.Record) { <-p.gate }
+
+// stalledKV is a store whose writes never finish until release is closed.
+type stalledKV struct {
+	kvstore.KVClient
+	release chan struct{}
+}
+
+func (s stalledKV) KVGet(context.Context, string) ([]byte, bool, error) { return nil, false, nil }
+
+func (s stalledKV) KVIncrBy(context.Context, string, int64) (int64, error) {
+	<-s.release
+	return 0, nil
+}
+
+func chargeBudgetRecord(engine *budget.Engine, tokens int64) {
+	_, ticket := engine.Admit(budgetServiceKey, "claude-fable-5")
+	engine.HandleUsage(budget.WithTicket(context.Background(), ticket), usage.Record{
+		APIKey:   budgetServiceKey,
+		Provider: "claude",
+		Model:    "claude-fable-5",
+		Detail:   usage.Detail{InputTokens: tokens, TotalTokens: tokens},
+	})
+}
+
+// A record that is still queued behind a slow plugin when shutdown starts must be charged before the
+// counters are flushed.
+func TestShutdownChargesQueuedUsageBeforeFlushing(t *testing.T) {
+	store, err := kvstore.OpenBoltStore(filepath.Join(t.TempDir(), "kv.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	withStore := budget.WithKV(func() (kvstore.KVClient, bool, error) { return store, true, nil })
+	engine := isolateBudgetEngine(t, withStore, budget.WithFlushInterval(time.Hour))
+	cfg := budgetServiceConfig()
+
+	manager := usage.NewManager(16)
+	gate := make(chan struct{})
+	manager.Register(blockingUsagePlugin{gate: gate}) // delivered before the budget engine
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startBudgets(ctx, manager, cfg)
+	_, ticket := engine.Admit(budgetServiceKey, "claude-fable-5")
+	manager.Publish(budget.WithTicket(context.Background(), ticket), usage.Record{
+		APIKey:   budgetServiceKey,
+		Provider: "claude",
+		Model:    "claude-fable-5",
+		Detail:   usage.Detail{InputTokens: 700_000, TotalTokens: 700_000},
+	})
+
+	release := time.AfterFunc(50*time.Millisecond, func() { close(gate) })
+	t.Cleanup(func() {
+		if release.Stop() {
+			close(gate)
+		}
+	})
+	if !stopUsageAndFlushBudgets(context.Background(), manager, 5*time.Second) {
+		t.Fatal("the budget flush did not finish")
+	}
+
+	requireRemainingAfterRestart(t, withStore, cfg, 1_300_000, "usage queued at shutdown was not charged before the flush")
+}
+
+// A plugin that never returns must not hold shutdown: the drain wait is bounded and the flush still runs.
+func TestShutdownDoesNotWaitForeverForQueuedUsage(t *testing.T) {
+	store, err := kvstore.OpenBoltStore(filepath.Join(t.TempDir(), "kv.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	withStore := budget.WithKV(func() (kvstore.KVClient, bool, error) { return store, true, nil })
+	engine := isolateBudgetEngine(t, withStore, budget.WithFlushInterval(time.Hour))
+	cfg := budgetServiceConfig()
+	applyAPIKeyBudgets(cfg)
+	chargeBudgetRecord(engine, 400_000)
+
+	manager := usage.NewManager(4)
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	manager.Register(blockingUsagePlugin{gate: gate})
+	manager.Publish(context.Background(), usage.Record{Model: "m"})
+
+	done := make(chan bool, 1)
+	go func() { done <- stopUsageAndFlushBudgets(context.Background(), manager, 50*time.Millisecond) }()
+	select {
+	case flushed := <-done:
+		if !flushed {
+			t.Fatal("the flush must still run when the drain times out")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown is held by a usage plugin that never returns")
+	}
+	requireRemainingAfterRestart(t, withStore, cfg, 1_600_000, "the flush did not run after the drain timed out")
+}
+
+// A store that stalls must not hold shutdown either, and the caller learns the flush is unfinished so it
+// does not close a store that is still in use.
+func TestShutdownDoesNotWaitForeverForAStalledFlush(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	stalled := stalledKV{release: release}
+	engine := isolateBudgetEngine(t,
+		budget.WithKV(func() (kvstore.KVClient, bool, error) { return stalled, true, nil }),
+		budget.WithFlushInterval(time.Hour))
+	applyAPIKeyBudgets(budgetServiceConfig())
+	chargeBudgetRecord(engine, 100_000)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- stopUsageAndFlushBudgets(context.Background(), usage.NewManager(1), 50*time.Millisecond)
+	}()
+	select {
+	case flushed := <-done:
+		if flushed {
+			t.Fatal("a flush that is still blocked on the store must be reported as unfinished")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown is held by a stalled KV store")
 	}
 }
 

@@ -2,6 +2,7 @@ package cliproxy
 
 import (
 	"context"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -36,9 +37,46 @@ func applyAPIKeyBudgets(cfg *config.Config) {
 	}
 }
 
+// budgetShutdownWait bounds each of the two waits of stopUsageAndFlushBudgets, so a stuck usage plugin
+// or a stalled KV store delays shutdown by seconds, not indefinitely.
+const budgetShutdownWait = 5 * time.Second
+
 // flushBudgets writes pending usage counts to the KV store. Call it before the store is closed.
 func flushBudgets(ctx context.Context) {
 	if err := budget.Default().Flush(ctx); err != nil {
 		log.WithError(err).Warn("failed to flush api-key budget counters before shutdown")
+	}
+}
+
+// stopUsageAndFlushBudgets stops the usage manager, waits (at most wait) for it to deliver the records
+// still queued, so the budget engine charges them, then flushes the budget counters (again at most
+// wait). It reports whether the flush finished. When it did not, a store write may still be running and
+// the caller must not close the store under it.
+func stopUsageAndFlushBudgets(ctx context.Context, manager *usage.Manager, wait time.Duration) bool {
+	manager.Stop()
+	drainCtx, cancelDrain := context.WithTimeout(ctx, wait)
+	defer cancelDrain()
+	if !manager.WaitStopped(drainCtx) {
+		log.Warn("usage records were still queued at shutdown; api-key budgets may miss the last ones")
+	}
+
+	flushCtx, cancelFlush := context.WithTimeout(ctx, wait)
+	defer cancelFlush()
+	flushed := make(chan struct{})
+	go func() {
+		defer close(flushed)
+		flushBudgets(flushCtx)
+	}()
+	select {
+	case <-flushed:
+		return true
+	case <-flushCtx.Done():
+		select {
+		case <-flushed:
+			return true
+		default:
+			log.Warn("api-key budget flush did not finish before shutdown; the KV store is left open")
+			return false
+		}
 	}
 }

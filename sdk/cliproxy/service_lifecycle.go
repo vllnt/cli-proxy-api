@@ -393,16 +393,18 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
-		flushBudgets(ctx)
-		if errShutdownKV := s.shutdownKVStore(); errShutdownKV != nil {
-			log.Errorf("failed to stop local kv store: %v", errShutdownKV)
-			if shutdownErr == nil {
-				shutdownErr = errShutdownKV
+		// Usage records are what the budget counters charge, so the usage manager drains first and the
+		// counters are flushed after it, then the store that holds them closes.
+		if stopUsageAndFlushBudgets(ctx, usage.DefaultManager(), budgetShutdownWait) {
+			if errShutdownKV := s.shutdownKVStore(); errShutdownKV != nil {
+				log.Errorf("failed to stop local kv store: %v", errShutdownKV)
+				if shutdownErr == nil {
+					shutdownErr = errShutdownKV
+				}
 			}
 		}
 
 		helps.RetireProxyPoolPublisher(s.proxyPoolPublisher)
-		usage.StopDefault()
 	})
 	return shutdownErr
 }
