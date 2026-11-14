@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -398,6 +399,12 @@ func (h *OpenAIResponsesAPIHandler) authenticateResponsesWebsocketTurn(c *gin.Co
 	if c != nil && updateRequestContext {
 		c.Set("userApiKey", result.Principal)
 		c.Set("accessProvider", result.Provider)
+		// Rebind a restriction from the current configuration so a reload that narrows the key
+		// reaches an open socket. A turn without one keeps the restriction bound at connect: it
+		// can only be stricter, and a key must never become unrestricted mid-socket.
+		if result.CredentialAllowlist != nil {
+			c.Set(sdkaccess.CredentialAllowlistContextKey, result.CredentialAllowlist)
+		}
 		if len(result.Metadata) > 0 {
 			c.Set("accessMetadata", result.Metadata)
 		} else {
