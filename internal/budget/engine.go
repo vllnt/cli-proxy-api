@@ -508,6 +508,17 @@ func (e *Engine) run(ctx context.Context, tick <-chan time.Time, stop func()) {
 // once without touching the KV store. It never panics.
 func (e *Engine) Flush(ctx context.Context) error { return e.flush(ctx, true) }
 
+// HasCounters reports whether the engine tracks any usage, that is, whether a flush has anything to
+// write. An engine that never had a policy, or whose keys never made a request, has none.
+func (e *Engine) HasCounters() bool {
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.counters) > 0
+}
+
 // flush is Flush. The periodic flusher passes final=false, which holds back counters that are not
 // loaded yet and retries their load: writing usage before the persisted total is known would count it
 // twice once the total arrives.

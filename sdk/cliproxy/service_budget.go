@@ -50,17 +50,29 @@ func flushBudgets(ctx context.Context) {
 
 // stopUsageAndFlushBudgets stops the usage manager, waits (at most wait) for it to deliver the records
 // still queued, so the budget engine charges them, then flushes the budget counters (again at most
-// wait). It reports whether the flush finished. When it did not, a store write may still be running and
-// the caller must not close the store under it.
+// wait). It reports whether the store may be closed: false means the flush did not finish, a store write
+// may still be running and the caller must not close the store under it.
+//
+// Both waits are limited by wait alone, not by ctx: the shutdown context may already have ended, and the
+// last usage still has to reach the store. Without budgets there is nothing to drain or flush, so the
+// manager is only stopped, as it always was.
 func stopUsageAndFlushBudgets(ctx context.Context, manager *usage.Manager, wait time.Duration) bool {
 	manager.Stop()
-	drainCtx, cancelDrain := context.WithTimeout(ctx, wait)
+	engine := budget.Default()
+	if !engine.Enabled() && !engine.HasCounters() {
+		return true
+	}
+
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancelDrain()
 	if !manager.WaitStopped(drainCtx) {
 		log.Warn("usage records were still queued at shutdown; api-key budgets may miss the last ones")
 	}
+	if !engine.HasCounters() {
+		return true
+	}
 
-	flushCtx, cancelFlush := context.WithTimeout(ctx, wait)
+	flushCtx, cancelFlush := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancelFlush()
 	flushed := make(chan struct{})
 	go func() {

@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	log "github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
+
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/budget"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/kvstore"
@@ -310,6 +313,125 @@ func TestShutdownDoesNotWaitForeverForAStalledFlush(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown is held by a stalled KV store")
 	}
+}
+
+// shutdownLogs collects what shutdown logs from here on.
+func shutdownLogs(t *testing.T) *logrustest.Hook {
+	t.Helper()
+	previous := log.GetLevel()
+	log.SetLevel(log.DebugLevel)
+	t.Cleanup(func() { log.SetLevel(previous) })
+	hook := logrustest.NewGlobal()
+	hook.Reset()
+	return hook
+}
+
+// requireNoShutdownWarnings fails when shutdown warned about usage or budgets.
+func requireNoShutdownWarnings(t *testing.T, hook *logrustest.Hook) {
+	t.Helper()
+	for _, entry := range hook.AllEntries() {
+		if entry.Level <= log.WarnLevel && (strings.Contains(entry.Message, "budget") || strings.Contains(entry.Message, "usage records")) {
+			t.Fatalf("shutdown logged a warning although there was nothing to flush: %q", entry.Message)
+		}
+	}
+}
+
+func expiredContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// Without budgets there is nothing to drain or flush, so an expired shutdown context must not turn into
+// a failed flush: the store has to be closed and nothing may be logged. The outcome used to depend on a
+// race, so it is repeated.
+func TestShutdownWithoutBudgetsIgnoresAnExpiredContext(t *testing.T) {
+	hook := shutdownLogs(t)
+	isolateBudgetEngine(t)
+	for attempt := range 20 {
+		manager := usage.NewManager(4)
+		manager.Publish(context.Background(), usage.Record{Model: "m"}) // starts the dispatcher
+
+		done := make(chan bool, 1)
+		go func() { done <- stopUsageAndFlushBudgets(expiredContext(), manager, budgetShutdownWait) }()
+		select {
+		case closeStore := <-done:
+			if !closeStore {
+				t.Fatalf("attempt %d: the store must be closed when there is nothing to flush", attempt)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("attempt %d: shutdown did not return", attempt)
+		}
+	}
+	requireNoShutdownWarnings(t, hook)
+}
+
+// A usage plugin that never returns holds nothing of a budget: without budgets shutdown must not wait for
+// it, however long the configured wait is.
+func TestShutdownWithoutBudgetsDoesNotWaitForQueuedUsage(t *testing.T) {
+	isolateBudgetEngine(t)
+	manager := usage.NewManager(4)
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	manager.Register(blockingUsagePlugin{gate: gate})
+	manager.Publish(context.Background(), usage.Record{Model: "m"})
+
+	done := make(chan bool, 1)
+	go func() { done <- stopUsageAndFlushBudgets(context.Background(), manager, time.Hour) }()
+	select {
+	case closeStore := <-done:
+		if !closeStore {
+			t.Fatal("the store must be closed when there is nothing to flush")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown waits for usage records that no budget charges")
+	}
+}
+
+// The whole service: with no budgets and a shutdown context that already ended, the KV store still closes.
+func TestServiceShutdownClosesTheKVStoreWithoutBudgetsAfterTheContextEnded(t *testing.T) {
+	t.Cleanup(func() { _ = kvstore.ShutdownLocal() })
+	hook := shutdownLogs(t)
+	isolateBudgetEngine(t)
+	for attempt := range 5 {
+		service := &Service{}
+		service.applyKVStoreConfig(&internalconfig.Config{
+			KVStore: internalconfig.KVStoreConfig{Path: filepath.Join(t.TempDir(), "kv.db")},
+		})
+		if client, active, err := kvstore.CurrentKVClient(); err != nil || !active || client == nil {
+			t.Fatalf("attempt %d: the KV store did not open: %v, %v, %v", attempt, client, active, err)
+		}
+
+		if err := service.Shutdown(expiredContext()); err != nil {
+			t.Fatalf("attempt %d: Shutdown() = %v", attempt, err)
+		}
+		if client, active, err := kvstore.CurrentKVClient(); client != nil || active || err != nil {
+			t.Fatalf("attempt %d: the KV store was left open after Shutdown: %v, %v, %v", attempt, client, active, err)
+		}
+	}
+	requireNoShutdownWarnings(t, hook)
+}
+
+// With budgets the flush still has to happen after the shutdown context ended: its time limit is its own.
+func TestShutdownFlushesBudgetsAfterTheContextEnded(t *testing.T) {
+	store, err := kvstore.OpenBoltStore(filepath.Join(t.TempDir(), "kv.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	withStore := budget.WithKV(func() (kvstore.KVClient, bool, error) { return store, true, nil })
+	engine := isolateBudgetEngine(t, withStore)
+	cfg := budgetServiceConfig()
+	applyAPIKeyBudgets(cfg)
+	chargeBudgetRecord(engine, 400_000)
+
+	manager := usage.NewManager(4)
+	manager.Publish(context.Background(), usage.Record{Model: "m"}) // starts the dispatcher
+	if !stopUsageAndFlushBudgets(expiredContext(), manager, budgetShutdownWait) {
+		t.Fatal("the flush did not finish")
+	}
+
+	requireRemainingAfterRestart(t, withStore, cfg, 1_600_000, "the flush was skipped because the shutdown context had ended")
 }
 
 func TestStageHomeOverlayRejectsBudgets(t *testing.T) {

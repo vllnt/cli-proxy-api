@@ -202,6 +202,23 @@ func countLogs(hook *logrustest.Hook, substr string) int {
 	return n
 }
 
+func TestHasCountersReportsWhetherAFlushHasAnythingToWrite(t *testing.T) {
+	var missing *Engine
+	if missing.HasCounters() || New().HasCounters() {
+		t.Fatal("an engine without a policy has no counters")
+	}
+	e, _, _ := newTestEngine(t, budgetsFor("team-x", rl("claude-fable-*", "week", 100, "enforce")))
+	if e.HasCounters() {
+		t.Fatal("no counter exists before a key makes a request")
+	}
+	if _, ticket := e.Admit(keyX, "claude-fable-5"); ticket == nil {
+		t.Fatal("no ticket")
+	}
+	if !e.HasCounters() {
+		t.Fatal("an admitted request must create the counter a flush writes")
+	}
+}
+
 func TestAdmitUnderAtOver(t *testing.T) {
 	e, _, _ := newTestEngine(t, budgetsFor("team-x", rl("claude-fable-*", "week", 100, "enforce")))
 
