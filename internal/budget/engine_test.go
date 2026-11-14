@@ -177,7 +177,10 @@ func usedByPattern(e *Engine) map[string]int64 {
 	defer e.mu.RUnlock()
 	out := map[string]int64{}
 	for _, c := range e.counters {
-		out[c.pattern+"|"+c.window] += c.used.Load()
+		// Apply preloads a counter for every rule; one that was never charged counts as untouched.
+		if used := c.used.Load(); used != 0 {
+			out[c.pattern+"|"+c.window] += used
+		}
 	}
 	return out
 }
@@ -208,14 +211,8 @@ func TestHasCountersReportsWhetherAFlushHasAnythingToWrite(t *testing.T) {
 		t.Fatal("an engine without a policy has no counters")
 	}
 	e, _, _ := newTestEngine(t, budgetsFor("team-x", rl("claude-fable-*", "week", 100, "enforce")))
-	if e.HasCounters() {
-		t.Fatal("no counter exists before a key makes a request")
-	}
-	if _, ticket := e.Admit(keyX, "claude-fable-5"); ticket == nil {
-		t.Fatal("no ticket")
-	}
 	if !e.HasCounters() {
-		t.Fatal("an admitted request must create the counter a flush writes")
+		t.Fatal("Apply must preload the current-window counter of every rule")
 	}
 }
 

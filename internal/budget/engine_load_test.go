@@ -196,3 +196,23 @@ func TestFailedLoadIsRetriedByTheNextFlushAndAddsThePersistedTotalOnce(t *testin
 		t.Fatalf("remaining = %d, want 88: the persisted total must be added exactly once", got)
 	}
 }
+
+// TestApplyPreloadsCurrentWindowsSoTheFirstRequestAfterRestartSeesThePersistedTotal covers a restart:
+// the persisted total must be loaded when the policy is applied, not lazily on the first request, which
+// would admit that request against an empty counter.
+func TestApplyPreloadsCurrentWindowsSoTheFirstRequestAfterRestartSeesThePersistedTotal(t *testing.T) {
+	kv := newFakeKV()
+	kv.put(dayCounterKey(), 100*milliPerToken)
+	var queued []func()
+	clock := newFakeClock(saturdayNoon)
+	e := New(WithClock(clock.Now), staticKV(kv), func(e *Engine) { e.spawn = func(f func()) { queued = append(queued, f) } })
+	if err := e.Apply(sdkConfig(budgetsFor("team-x", rl("*", "day", 100, "enforce")))); err != nil {
+		t.Fatal(err)
+	}
+	for _, load := range queued {
+		load()
+	}
+	if d, _ := e.Admit(keyX, "claude-fable-5"); d.Exhausted == nil {
+		t.Fatalf("first request after restart was admitted against an unloaded counter: %+v", d)
+	}
+}

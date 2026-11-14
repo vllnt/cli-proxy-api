@@ -165,8 +165,31 @@ func (e *Engine) Apply(cfg *config.SDKConfig) error {
 	e.runMu.Lock()
 	defer e.runMu.Unlock()
 	e.pol.Store(pol)
+	e.preload(pol)
 	e.syncFlusher()
 	return nil
+}
+
+// preload creates the current-window counter of every rule, which starts loading its persisted total,
+// so the first request after a start or reload is checked against that total instead of an empty
+// counter. It never panics.
+func (e *Engine) preload(pol *policy) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.recovered("preload", r)
+		}
+	}()
+	if pol == nil {
+		return
+	}
+	now := e.now()
+	for label, rules := range pol.rules {
+		for _, r := range rules {
+			if start, end, ok := WindowBounds(r.window, pol.loc, now); ok {
+				e.counter(label, r, start, end)
+			}
+		}
+	}
 }
 
 // Enabled reports whether any budget rule is active. Callers use it to skip all budget work, so a

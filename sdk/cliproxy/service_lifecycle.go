@@ -58,7 +58,6 @@ func (s *Service) Run(ctx context.Context) error {
 
 	usage.StartDefault(ctx)
 	cfg := s.currentConfig()
-	startBudgets(ctx, usage.DefaultManager(), cfg)
 	homeEnabled := cfg != nil && cfg.Home.Enabled
 	if homeEnabled {
 		s.cfgMu.Lock()
@@ -83,6 +82,8 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 		s.applyKVStoreConfig(cfg)
 	}
+	// After the KV store is configured, so the budget counters load their persisted totals.
+	startBudgets(ctx, usage.DefaultManager(), cfg)
 
 	s.applyRetryConfig(cfg)
 	s.configureCooldownStateStore(cfg)
