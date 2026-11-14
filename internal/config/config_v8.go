@@ -78,6 +78,7 @@ func buildV8Paths() []configPath {
 		{"tls", "server.tls"}, {"shutdown-timeout", "server.shutdown-timeout"}, {"commercial-mode", "server.commercial-mode"}, {"discovery", "server.discovery"}, {"kv-store", "server.kv-store"},
 		{"remote-management", "management"}, {"api-keys", "access.api-keys"},
 		{"api-key-labels", "access.api-key-labels"}, {"api-key-auth-allowlist", "access.api-key-auth-allowlist"},
+		{"api-key-budgets", "access.api-key-budgets"},
 		{"credential-concurrency", "credentials.concurrency"}, {"credential-in-flight", "credentials.in-flight"},
 		{"force-model-prefix", "routing.force-model-prefix"},
 		{"request-retry", "routing.retry.request-retry"}, {"max-retry-credentials", "routing.retry.max-retry-credentials"},
