@@ -716,6 +716,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		if len(models) == 0 {
 			continue
 		}
+		models, errBudget := admitUpstreamModelsBudget(execCtx, models)
+		if errBudget != nil {
+			return cliproxyexecutor.Response{}, errBudget
+		}
 		attempted[auth.ID] = struct{}{}
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
@@ -1290,6 +1294,12 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				}
 			}
 			continue
+		}
+		if selection == nil {
+			var errBudget error
+			if models, errBudget = admitUpstreamModelsBudget(execCtx, models); errBudget != nil {
+				return nil, errBudget
+			}
 		}
 		attempted[auth.ID] = struct{}{}
 		var errPrepare error
