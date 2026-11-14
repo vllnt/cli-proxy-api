@@ -122,15 +122,25 @@ Changing a rule's `models` or `window` starts a new counter, because those defin
 - Counters live in the local KV store (`server.kv-store`, bbolt) and survive restarts. With the KV
   store disabled they are memory-only and reset on restart (logged once at start). They are per
   process: several proxy instances do not share counters.
-- Usage is added in memory and written in batches every 2 seconds, and once more on shutdown. A crash
-  loses at most the last interval. A per-record write costs about 105,750 ns, a batched one about
-  743 ns, which is why the default is batched.
+- Usage is added in memory and written in batches every 2 seconds. A crash loses at most the last
+  interval. Writing each record to bbolt measured about 105,750 ns against about 743 ns batched, which is
+  why writes are batched.
+- **Shutdown.** The usage manager stops first and delivers the records still queued, so they are charged;
+  then the counters are flushed and the KV store closes. Both waits are capped at 5 seconds, so a stuck
+  usage plugin or a stalled store cannot hold shutdown. If the flush has not finished by then, the store
+  is left open for the process exit to reclaim.
 - **The engine fails open.** KV errors, a corrupt counter, a panic or an invalid policy never reject a
   request; they are logged and the request runs. Only a used-up enforce rule rejects.
-- No config means the policy is absent: admission is a nil check (about 35 ns, no allocations).
-- Nothing blocks the request path on I/O: admission reads in-memory counters, and KV access happens in
-  the background flusher and when a counter is first loaded.
-- Removing the config disables the engine at the next reload.
+- No config means the policy is absent: admission is a nil check (about 35 ns, no allocations). The
+  flusher does not run, the KV store is not read and nothing is logged.
+- The flusher runs only while budgets are configured. Removing the config at a reload disables the engine
+  and stops the flusher; adding budgets back starts it.
+- Nothing blocks the request path or the usage dispatcher on I/O: admission and charging use in-memory
+  counters. KV access happens in the background, in the flusher and in a one-off read of a counter's saved
+  total the first time that counter is used. Until that read finishes (normally milliseconds) the counter
+  holds only what this process has charged; the saved total is added when it arrives, so nothing is lost
+  or counted twice. Usage is not written to the store before the read has succeeded, and a failed read is
+  retried on the following flushes until it does.
 
 ## Limits
 
@@ -142,12 +152,18 @@ Changing a rule's `models` or `window` starts a new counter, because those defin
   the Muse Code relay publish no usage. They are rejected when the budget is used up but are not charged.
   The relay has no model at admission, so only rules with `models: "*"` apply to it.
 - **Token counting.** `count_tokens` requests are neither charged nor rejected.
+- **After a restart.** The first requests of a window can see more budget than is really left, until the
+  saved total of their counters has loaded. The same window applies to a counter whose read keeps failing.
 - **Websockets.** Every `response.create` turn is judged again, including follow-up frames on a duplex
   socket. Websocket responses carry no `X-Budget-*` headers.
 - **Aliases.** The alias check runs once the conductor has selected a credential, on the models that
   credential resolves the requested name to. With a model pool alias, exhausted models are skipped and
   a model with budget left is used. If none is left, the request ends with the 429 instead of trying
-  other credentials, so the first credential's resolution decides.
+  other credentials, so the first selected credential's resolved models decide: another credential that
+  would resolve the alias to a model with budget left is not tried.
+- **Plugin executors.** Routes served by a plugin executor are admitted on the requested model only; there
+  is no upstream re-check, so an alias that resolves to a budgeted model is not rejected on them. Their
+  usage is still charged to every rule that matches the model that served the request.
 - **Home mode.** Budgets are not supported with Home enabled (the control plane routes and accounts
   requests). Configuring them there is a validation error.
 - `/v0/management` endpoints are not part of this feature; config diffs in the log show label and
