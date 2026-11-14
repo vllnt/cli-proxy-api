@@ -34,9 +34,10 @@ func isolateBudgetEngine(t *testing.T, opts ...budget.Option) *budget.Engine {
 	return engine
 }
 
-func budgetLabel(engine *budget.Engine) string {
+// budgetsEnforced reports whether the engine applies the budgets of budgetServiceConfig to the test key.
+func budgetsEnforced(engine *budget.Engine) bool {
 	_, ticket := engine.Admit(budgetServiceKey, "claude-fable-5")
-	return ticket.Label()
+	return ticket != nil
 }
 
 func TestCommitConfigUpdateAppliesAndValidatesAPIKeyBudgets(t *testing.T) {
@@ -45,7 +46,7 @@ func TestCommitConfigUpdateAppliesAndValidatesAPIKeyBudgets(t *testing.T) {
 	if commit := service.commitConfigUpdate(budgetServiceConfig()); commit.cfg == nil {
 		t.Fatal("a valid budgets config must be accepted")
 	}
-	if !engine.Enabled() || budgetLabel(engine) != "agents" {
+	if !engine.Enabled() || !budgetsEnforced(engine) {
 		t.Fatal("a committed config must install the budget policy")
 	}
 
@@ -60,7 +61,7 @@ func TestCommitConfigUpdateAppliesAndValidatesAPIKeyBudgets(t *testing.T) {
 	if commit := service.commitConfigUpdate(home); commit.cfg != nil {
 		t.Fatal("budgets in Home mode must be rejected")
 	}
-	if budgetLabel(engine) != "agents" {
+	if !budgetsEnforced(engine) {
 		t.Fatal("a rejected update must keep the last valid policy")
 	}
 	service.cfgMu.RLock()
@@ -137,7 +138,7 @@ func TestShutdownFlushesPendingBudgetUsage(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	withStore := budget.WithKV(func() (kvstore.KVClient, bool, error) { return store, true, nil })
-	engine := isolateBudgetEngine(t, withStore, budget.WithFlushInterval(time.Hour))
+	engine := isolateBudgetEngine(t, withStore)
 	cfg := budgetServiceConfig()
 	applyAPIKeyBudgets(cfg)
 	if !engine.Enabled() {
@@ -224,7 +225,7 @@ func TestShutdownChargesQueuedUsageBeforeFlushing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	withStore := budget.WithKV(func() (kvstore.KVClient, bool, error) { return store, true, nil })
-	engine := isolateBudgetEngine(t, withStore, budget.WithFlushInterval(time.Hour))
+	engine := isolateBudgetEngine(t, withStore)
 	cfg := budgetServiceConfig()
 
 	manager := usage.NewManager(16)
@@ -262,7 +263,7 @@ func TestShutdownDoesNotWaitForeverForQueuedUsage(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	withStore := budget.WithKV(func() (kvstore.KVClient, bool, error) { return store, true, nil })
-	engine := isolateBudgetEngine(t, withStore, budget.WithFlushInterval(time.Hour))
+	engine := isolateBudgetEngine(t, withStore)
 	cfg := budgetServiceConfig()
 	applyAPIKeyBudgets(cfg)
 	chargeBudgetRecord(engine, 400_000)
@@ -293,8 +294,7 @@ func TestShutdownDoesNotWaitForeverForAStalledFlush(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	stalled := stalledKV{release: release}
 	engine := isolateBudgetEngine(t,
-		budget.WithKV(func() (kvstore.KVClient, bool, error) { return stalled, true, nil }),
-		budget.WithFlushInterval(time.Hour))
+		budget.WithKV(func() (kvstore.KVClient, bool, error) { return stalled, true, nil }))
 	applyAPIKeyBudgets(budgetServiceConfig())
 	chargeBudgetRecord(engine, 100_000)
 

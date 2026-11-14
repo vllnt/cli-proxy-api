@@ -88,10 +88,7 @@ func TestTicketContext(t *testing.T) {
 	}
 	ticket := &Ticket{label: "team-x"}
 	ctx := WithTicket(context.Background(), ticket)
-	if got := TicketFromContext(ctx); got != ticket || got.Label() != "team-x" {
+	if got := TicketFromContext(ctx); got != ticket || got.label != "team-x" {
 		t.Fatalf("round trip failed: %+v", got)
-	}
-	if (*Ticket)(nil).Label() != "" {
-		t.Fatal("nil ticket label must be empty")
 	}
 }

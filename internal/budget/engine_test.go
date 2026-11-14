@@ -155,7 +155,7 @@ func newTestEngine(t *testing.T, budgets *config.APIKeyBudgets, opts ...Option) 
 	t.Helper()
 	clock := newFakeClock(saturdayNoon)
 	kv := newFakeKV()
-	base := []Option{WithClock(clock.Now), staticKV(kv), WithFlushInterval(time.Hour), withInlineLoads()}
+	base := []Option{WithClock(clock.Now), staticKV(kv), withInlineLoads()}
 	e := New(append(base, opts...)...)
 	if err := e.Apply(sdkConfig(budgets)); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -209,7 +209,7 @@ func TestAdmitUnderAtOver(t *testing.T) {
 	if !d.Applies || d.Exhausted != nil || d.RemainingTokens != 100 || d.Mode != "enforce" {
 		t.Fatalf("fresh decision = %+v", d)
 	}
-	if ticket == nil || ticket.Label() != "team-x" {
+	if ticket == nil || ticket.label != "team-x" {
 		t.Fatalf("ticket = %+v", ticket)
 	}
 	if want := utc("2026-11-16T00:00:00Z"); !d.ResetAt.Equal(want) {
@@ -282,7 +282,7 @@ func TestAdmitNonMatchingModelIssuesTicketWithoutApplying(t *testing.T) {
 	if d.Applies || d.Exhausted != nil || d.Mode != "" {
 		t.Fatalf("decision = %+v, want not applicable", d)
 	}
-	if ticket == nil || ticket.Label() != "team-x" {
+	if ticket == nil || ticket.label != "team-x" {
 		t.Fatalf("a labelled key keeps a ticket so the conductor can check upstream models, got %v", ticket)
 	}
 }
@@ -738,7 +738,7 @@ func TestRestartKeepsCountersWithBoltStore(t *testing.T) {
 	clock := newFakeClock(saturdayNoon)
 	cfg := sdkConfig(budgetsFor("team-x", rl("claude-fable-*", "week", 100, "enforce")))
 	newEngine := func() *Engine {
-		e := New(WithClock(clock.Now), staticKV(store), WithFlushInterval(time.Hour), withInlineLoads())
+		e := New(WithClock(clock.Now), staticKV(store), withInlineLoads())
 		if applyErr := e.Apply(cfg); applyErr != nil {
 			t.Fatal(applyErr)
 		}
@@ -776,7 +776,7 @@ func TestRestartKeepsCountersWithBoltStore(t *testing.T) {
 func TestMemoryOnlyWhenNoKVStoreIsLoggedOnce(t *testing.T) {
 	hook := captureLogs(t)
 	clock := newFakeClock(saturdayNoon)
-	e := New(WithClock(clock.Now), WithKV(func() (kvstore.KVClient, bool, error) { return nil, false, nil }), WithFlushInterval(time.Hour))
+	e := New(WithClock(clock.Now), WithKV(func() (kvstore.KVClient, bool, error) { return nil, false, nil }))
 	if err := e.Apply(sdkConfig(budgetsFor("team-x", rl("*", "day", 10, "enforce"), rl("*", "week", 10, "enforce")))); err != nil {
 		t.Fatal(err)
 	}
@@ -799,19 +799,6 @@ func TestMemoryOnlyWhenNoKVStoreIsLoggedOnce(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("memory-only notice logged %d times, want once", n)
-	}
-}
-
-func TestPerRecordFlushWithZeroInterval(t *testing.T) {
-	e, _, kv := newTestEngine(t, budgetsFor("team-x", rl("*", "day", 100, "enforce")), WithFlushInterval(0))
-	_, ticket := e.Admit(keyX, "m")
-	charge(e, ticket, rec(keyX, "m", 6))
-	if kv.total() != 6_000 {
-		t.Fatalf("interval 0 persists every record immediately, total = %d", kv.total())
-	}
-	charge(e, ticket, rec(keyX, "m", 4))
-	if kv.total() != 10_000 {
-		t.Fatalf("total = %d, want 10000", kv.total())
 	}
 }
 

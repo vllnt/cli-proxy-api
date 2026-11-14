@@ -23,21 +23,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// DefaultFlushInterval is how often in-memory usage is written to the KV store.
-// 0 writes after every usage record instead.
-const DefaultFlushInterval = 2 * time.Second
-
 const (
+	// flushInterval is how often in-memory usage is written to the KV store.
+	flushInterval = 2 * time.Second
 	// retention keeps a counter in the KV store this long after its window ends.
 	retention = 7 * 24 * time.Hour
 	// closeGrace keeps a closed window's counter in memory so streams that finish just after
 	// the boundary are still charged to it.
-	closeGrace = 5 * time.Minute
-	// idleSweepInterval drives window-close detection and eviction when per-record flushing is on.
-	idleSweepInterval = time.Minute
-	loadTimeout       = 2 * time.Second
-	flushTimeout      = 10 * time.Second
-	warnEvery         = time.Minute
+	closeGrace  = 5 * time.Minute
+	loadTimeout = 2 * time.Second
+	warnEvery   = time.Minute
 )
 
 type counterKey struct {
@@ -72,7 +67,6 @@ type Engine struct {
 	pol       atomic.Pointer[policy]
 	now       func() time.Time
 	kv        func() (kvstore.KVClient, bool, error)
-	interval  time.Duration
 	newTicker func(time.Duration) (<-chan time.Time, func())
 	// spawn runs a background load. Production starts a goroutine; tests can run it inline.
 	spawn func(func())
@@ -111,15 +105,6 @@ func WithKV(get func() (kvstore.KVClient, bool, error)) Option {
 	}
 }
 
-// WithFlushInterval sets the KV write interval. 0 writes after every usage record.
-func WithFlushInterval(d time.Duration) Option {
-	return func(e *Engine) {
-		if d >= 0 {
-			e.interval = d
-		}
-	}
-}
-
 func withTicker(fn func(time.Duration) (<-chan time.Time, func())) Option {
 	return func(e *Engine) { e.newTicker = fn }
 }
@@ -139,7 +124,6 @@ func New(opts ...Option) *Engine {
 	e := &Engine{
 		now:       time.Now,
 		kv:        kvstore.CurrentKVClient,
-		interval:  DefaultFlushInterval,
 		newTicker: realTicker,
 		spawn:     func(f func()) { go f() },
 		counters:  make(map[counterKey]*counter),
@@ -374,9 +358,6 @@ func (e *Engine) HandleUsage(ctx context.Context, record usage.Record) {
 		c := e.counter(label, r, start, end)
 		satAdd(&c.used, cost)
 		satAdd(&c.pending, cost)
-		if e.interval == 0 {
-			e.flushNow(c)
-		}
 	}
 }
 
@@ -496,11 +477,7 @@ func (e *Engine) syncFlusher() {
 	}
 	ctx, cancel := context.WithCancel(e.runCtx)
 	e.stopRun = cancel
-	interval := e.interval
-	if interval <= 0 {
-		interval = idleSweepInterval
-	}
-	tick, stop := e.newTicker(interval)
+	tick, stop := e.newTicker(flushInterval)
 	go e.run(ctx, tick, stop)
 }
 
@@ -572,26 +549,6 @@ func (e *Engine) flush(ctx context.Context, final bool) (err error) {
 	}
 	e.sweep(e.now(), ok)
 	return err
-}
-
-// flushNow writes one counter immediately (flush interval 0).
-func (e *Engine) flushNow(c *counter) {
-	if !c.loaded.Load() {
-		return
-	}
-	client, ok, err := e.kvClient()
-	if err != nil {
-		e.warn("budget: kv store unavailable, usage is kept in memory", err)
-		return
-	}
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
-	defer cancel()
-	if err := e.flushCounter(ctx, client, c, e.now()); err != nil {
-		e.warn("budget: writing a counter failed, usage is kept in memory and retried", err)
-	}
 }
 
 // flushCounter moves a counter's pending usage into the store. On any failure, including a panic in

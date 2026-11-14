@@ -19,14 +19,6 @@ type ticketRule struct {
 	start, end time.Time
 }
 
-// Label returns the budget label the request was admitted under.
-func (t *Ticket) Label() string {
-	if t == nil {
-		return ""
-	}
-	return t.label
-}
-
 func (t *Ticket) rule(id string) (ticketRule, bool) {
 	if t == nil {
 		return ticketRule{}, false
