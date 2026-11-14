@@ -348,6 +348,13 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		close(errChan)
 		return nil, nil, errChan
 	}
+	ctx, budgetErr := AdmitBudget(ctx, originalRequestedModel)
+	if budgetErr != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- budgetErr
+		close(errChan)
+		return nil, nil, errChan
+	}
 	if routeDecision.ExecutorPluginID != "" {
 		return h.streamWithPluginExecutor(ctx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
 	}

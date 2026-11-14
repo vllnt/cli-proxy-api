@@ -35,6 +35,10 @@ var corsExposedResponseHeaders = []string{
 	"X-SERVER-BUILD-DATE",
 	"Location",
 	"Retry-After",
+	// Per-key token budget state (see docs/api-key-budgets.md).
+	"X-Budget-Remaining",
+	"X-Budget-Reset",
+	"X-Budget-Mode",
 	// Cross-origin management clients must read the config version token to
 	// send it back as If-Match on writes.
 	"ETag",

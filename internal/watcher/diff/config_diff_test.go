@@ -815,6 +815,33 @@ func TestBuildConfigChangeDetails_RedactsAPIKeyLabelsAndAllowlist(t *testing.T) 
 	}
 }
 
+// api-key-budgets name labels, models and limits: the change log shows counts only.
+func TestBuildConfigChangeDetails_APIKeyBudgetsAreCountsOnly(t *testing.T) {
+	budgets := func(limit int64) *sdkconfig.APIKeyBudgets {
+		return &sdkconfig.APIKeyBudgets{Labels: map[string][]sdkconfig.APIKeyBudgetRule{
+			"monitor": {
+				{Models: "claude-fable-*", Window: "week", Limit: limit},
+				{Models: "*", Window: "day", Limit: 5},
+			},
+		}}
+	}
+	oldCfg := &config.Config{}
+	newCfg := &config.Config{SDKConfig: sdkconfig.SDKConfig{APIKeyBudgets: budgets(2000000)}}
+
+	details := BuildConfigChangeDetails(oldCfg, newCfg)
+	expectContains(t, details, "api-key-budgets: labels 0 -> 1, rules 0 -> 2 (contents redacted)")
+	if joined := strings.Join(details, "\n"); strings.Contains(joined, "claude-fable") || strings.Contains(joined, "2000000") || strings.Contains(joined, "monitor") {
+		t.Fatalf("change log leaks budget contents: %v", details)
+	}
+
+	retuned := &config.Config{SDKConfig: sdkconfig.SDKConfig{APIKeyBudgets: budgets(3000000)}}
+	expectContains(t, BuildConfigChangeDetails(newCfg, retuned), "api-key-budgets: labels 1 -> 1, rules 2 -> 2 (contents redacted)")
+	expectContains(t, BuildConfigChangeDetails(newCfg, oldCfg), "api-key-budgets: labels 1 -> 0, rules 2 -> 0 (contents redacted)")
+	if details = BuildConfigChangeDetails(newCfg, newCfg); len(details) != 0 {
+		t.Fatalf("unchanged budgets must report nothing, got %v", details)
+	}
+}
+
 func TestBuildConfigChangeDetails_ClaudeNativeToolSearch(t *testing.T) {
 	oldCfg := &config.Config{ClaudeKey: []config.ClaudeKey{{APIKey: "key", BaseURL: "https://gateway.example.com"}}}
 	newCfg := &config.Config{ClaudeKey: []config.ClaudeKey{{APIKey: "key", BaseURL: "https://gateway.example.com", NativeToolSearch: true}}}

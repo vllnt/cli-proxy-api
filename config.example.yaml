@@ -150,6 +150,20 @@ access:
   #     auth-ids: ["claude-0123abcd.json"]  # exact credential IDs
   #     tags: ["monitor-pool"]               # credentials whose "tags" attribute/metadata lists it
 
+  # Optional: per-key token budgets, keyed by the api-key-labels above. See docs/api-key-budgets.md.
+  # Start in observe mode (logs "budget would reject", never blocks), then switch to enforce.
+  # Cost is weighted tokens (input, output, cache-write, cache-read); windows are fixed calendar
+  # windows (day, week from Monday, month) starting at 00:00 in the timezone. Unlabelled keys are
+  # never limited. Not supported in Home mode.
+  # api-key-budgets:
+  #   mode: observe                 # observe (default) | enforce; a rule may override it
+  #   timezone: UTC                 # IANA name; windows start at 00:00 there
+  #   weights: {input: 1, output: 1, cache-write: 1, cache-read: 0.1}
+  #   labels:
+  #     agents:
+  #       - {models: "claude-fable-*", window: week, limit: 2000000}
+  #       - {models: "*", window: day, limit: 20000000, mode: enforce}
+
 # Optional credential concurrency and observation contracts.
 
 # credentials:

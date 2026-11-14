@@ -488,7 +488,11 @@ func mediaCredentialName(selected *auth.Auth, authIndex string) string {
 }
 
 func (h *Handler) selectOAuth(ctx context.Context, model string, opts coreexecutor.Options) (*auth.HomeDispatchSelection, *auth.Auth, error) {
-	// Every live selection honors the calling client API key's credential allowlist.
+	// Every live selection is judged against the calling client API key's token budget...
+	if _, errBudget := handlers.AdmitBudget(ctx, model); errBudget != nil {
+		return nil, nil, errBudget.Error
+	}
+	// ...and honors its credential allowlist.
 	if cfg := h.currentConfig(); cfg != nil {
 		if restrictions := handlers.AuthSelectionMetadata(ctx, &cfg.SDKConfig); len(restrictions) > 0 {
 			merged := maps.Clone(opts.Metadata)
@@ -848,6 +852,10 @@ func writeLiveError(c *gin.Context, status int, message string) {
 }
 
 func writeSelectionError(c *gin.Context, err error) {
+	// A budget error is already a client-ready JSON error body; keep its code on every route.
+	if handlers.WriteBudgetError(c, err) {
+		return
+	}
 	status := clienterror.HTTPStatusFromErrorOr(err, http.StatusServiceUnavailable)
 	for _, value := range auth.SafeResponseHeaders(err).Values("Retry-After") {
 		c.Writer.Header().Add("Retry-After", value)

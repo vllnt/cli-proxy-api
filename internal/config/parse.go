@@ -58,6 +58,9 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	if errValidate := cfg.ValidateAPIKeyAuthAllowlist(); errValidate != nil {
 		return nil, errValidate
 	}
+	if errValidate := cfg.ValidateAPIKeyBudgets(); errValidate != nil {
+		return nil, errValidate
+	}
 	if errValidate := cfg.Codex.LiveMediaRelay.Validate(); errValidate != nil {
 		return nil, errValidate
 	}

@@ -420,6 +420,17 @@ func (h *OpenAIResponsesAPIHandler) authenticateResponsesWebsocketTurn(c *gin.Co
 	return result.Principal, nil
 }
 
+// admitResponsesWebsocketTurnBudget checks the client key token budget for a follow-up frame, using the
+// frame's own model and falling back to the model the turn started with. It fails open.
+func admitResponsesWebsocketTurnBudget(ctx context.Context, turnPayload []byte, fallbackModel string) *interfaces.ErrorMessage {
+	model := strings.TrimSpace(ojson.GetBytesNoCopy(turnPayload, "model").String())
+	if model == "" {
+		model = fallbackModel
+	}
+	_, errBudget := handlers.AdmitBudget(ctx, model)
+	return errBudget
+}
+
 // ResponsesWebsocket handles websocket requests for /v1/responses.
 // It accepts `response.create` and `response.append` requests and streams
 // response events back as JSON websocket text messages. `response.interrupt`
@@ -946,6 +957,17 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		var preserveNativeOutput atomic.Bool
 		codexDuplexStream.Store(false)
 		pinnedAuthAttempted := false
+		// A budget rejection is a per-turn denial like the access check above: answer it and keep the
+		// socket open instead of ending the connection through the stream error path.
+		if _, errBudget := handlers.AdmitBudget(c.Request.Context(), modelName); errBudget != nil {
+			h.LoggingAPIResponseError(context.WithValue(context.Background(), "gin", c), errBudget)
+			markAPIResponseTimestamp(c)
+			if _, errWrite := writeResponsesWebsocketError(writer, wsTimelineLog, errBudget); errWrite != nil {
+				wsTerminateErr = errWrite
+				return
+			}
+			continue
+		}
 		turnStartEpoch := inputEpoch.Load()
 		cliCtx, cliCancel := h.GetContextWithCancel(h, c, executionParent)
 		cliCtx = cliproxyexecutor.WithDownstreamWebsocket(cliCtx)
@@ -965,6 +987,10 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 						StatusCode: http.StatusUnauthorized,
 						Error:      errors.New("client credential changed during the websocket stream; reconnect"),
 					}
+				}
+				if errAuth == nil {
+					// A follow-up frame never re-enters ExecuteStream, so judge the key budget here.
+					errAuth = admitResponsesWebsocketTurnBudget(cliCtx, turnPayload, modelName)
 				}
 				if errAuth == nil {
 					return nil, nil

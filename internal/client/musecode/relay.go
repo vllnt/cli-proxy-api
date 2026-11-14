@@ -156,6 +156,12 @@ func (h *Handler) Handle(c *gin.Context) {
 	if cfg != nil {
 		sdkCfg = &cfg.SDKConfig
 	}
+	// The relay picks Meta credentials itself, so it judges the client key token budget itself. It
+	// names no model, so only the catch-all rules of the key apply.
+	if _, errBudget := handlers.AdmitBudget(ctx, ""); errBudget != nil {
+		handlers.WriteBudgetError(c, errBudget.Error)
+		return
+	}
 	selectionOpts := coreexecutor.Options{
 		Headers:         c.Request.Header.Clone(),
 		OriginalRequest: reqBody,

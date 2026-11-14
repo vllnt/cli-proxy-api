@@ -269,6 +269,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// subscribe-config heartbeat connection is healthy.
 	engine.Use(s.homeHeartbeatMiddleware())
 	engine.Use(s.exampleAPIKeySafeModeMiddleware())
+	// Last, so its response writer sits on top of the ones above and they see the budget headers.
+	engine.Use(handlers.BudgetHeadersMiddleware())
 
 	// Setup routes
 	s.setupRoutes()

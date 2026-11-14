@@ -406,6 +406,16 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		c.JSON(clienterror.HTTPStatusFromErrorOr(errRoute, http.StatusServiceUnavailable), gin.H{"error": errRoute.Error()})
 		return
 	}
+	// This route selects a credential itself, so it judges the client key token budget itself.
+	budgetModel := strings.TrimSpace(selectionModel)
+	if budgetModel == "" {
+		budgetModel = strings.TrimSpace(routing.Model)
+	}
+	ctx, errBudget := handlers.AdmitBudget(ctx, budgetModel)
+	if errBudget != nil {
+		s.handlers.WriteErrorResponse(c, errBudget)
+		return
+	}
 	selectionOpts := coreexecutor.Options{
 		Headers:         selectionHeaders,
 		OriginalRequest: body,

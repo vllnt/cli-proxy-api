@@ -107,6 +107,10 @@ type SDKConfig struct {
 	// (access.api-key-auth-allowlist). Keys without a label or entry keep full access.
 	APIKeyAuthAllowlist map[string]APIKeyAuthAllowlist `yaml:"api-key-auth-allowlist,omitempty" json:"api-key-auth-allowlist,omitempty"`
 
+	// APIKeyBudgets sets per-label token budgets for client API keys (access.api-key-budgets).
+	// Unset (nil) disables the feature entirely.
+	APIKeyBudgets *APIKeyBudgets `yaml:"api-key-budgets,omitempty" json:"api-key-budgets,omitempty"`
+
 	// PassthroughHeaders controls whether upstream response headers are forwarded to downstream clients.
 	// Default is false (disabled).
 	PassthroughHeaders bool `yaml:"passthrough-headers" json:"passthrough-headers"`
