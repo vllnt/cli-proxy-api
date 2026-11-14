@@ -820,6 +820,7 @@ func (h *BaseAPIHandler) StartNonStreamingKeepAlive(c *gin.Context, ctx context.
 		ctx = context.Background()
 	}
 
+	guard := guardResponseWriter(c)
 	stopChan := make(chan struct{})
 	var stopOnce sync.Once
 	var wg sync.WaitGroup
@@ -835,8 +836,10 @@ func (h *BaseAPIHandler) StartNonStreamingKeepAlive(c *gin.Context, ctx context.
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				guard.Lock()
 				_, _ = c.Writer.Write([]byte("\n"))
 				flusher.Flush()
+				guard.Unlock()
 			}
 		}
 	}()

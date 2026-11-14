@@ -57,11 +57,24 @@ func AdmitBudget(ctx context.Context, model string) (outCtx context.Context, err
 	return outCtx, nil
 }
 
-// setBudgetHeaders reports the matching rule with the least budget left. Headers cannot change once
-// the response has started, so streaming responses and websocket turns get none.
+// setBudgetHeaders reports the matching rule with the least budget left, on streaming and non-streaming
+// responses alike. Headers cannot change once the response has started, so a response a keep-alive
+// already started goes without, and so do websocket turns.
+//
+// Admission can run while a keep-alive goroutine writes the same response. The writer guard orders the
+// two, and a keep-alive that holds it is committing the response, so there is nothing left to set.
 func setBudgetHeaders(ctx context.Context, decision budget.Decision) {
 	ginCtx, ok := ctx.Value("gin").(*gin.Context)
-	if !ok || ginCtx == nil || ginCtx.Writer == nil || ginCtx.Writer.Written() {
+	if !ok || ginCtx == nil || ginCtx.Writer == nil {
+		return
+	}
+	if guard := responseWriterGuard(ginCtx); guard != nil {
+		if !guard.TryLock() {
+			return
+		}
+		defer guard.Unlock()
+	}
+	if ginCtx.Writer.Written() {
 		return
 	}
 	header := ginCtx.Writer.Header()
