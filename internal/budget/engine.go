@@ -3,7 +3,7 @@
 // Reliability contract: the engine only ever rejects a request on purpose, when an enforced
 // rule is used up. Every internal failure (KV errors, panics, bad state, a policy that cannot
 // compile) fails open: the request is admitted and the problem is logged. With no budget
-// config the engine is a no-op that does no allocation or locking.
+// config the engine is a no-op: no allocation, locking, goroutine, KV access or logging.
 package budget
 
 import (
@@ -75,9 +75,11 @@ type Engine struct {
 	mu       sync.RWMutex
 	counters map[counterKey]*counter
 
-	startMu sync.Mutex
-	started bool
-	wg      sync.WaitGroup
+	// runMu guards the flusher lifecycle: runCtx is the context given to Start and stopRun stops the
+	// running flusher (nil while none runs).
+	runMu   sync.Mutex
+	runCtx  context.Context
+	stopRun context.CancelFunc
 
 	noKVOnce sync.Once
 	lastWarn atomic.Int64
@@ -158,13 +160,17 @@ func SetDefault(e *Engine) *Engine {
 // Apply compiles the config and installs it for all later requests. A nil config, or one without
 // rules, disables budgets. An invalid config is reported and the previous policy stays active.
 // Counters survive Apply: a rule keeps its count while its limit or mode changes, and a changed
-// pattern or window is a new rule with a fresh counter.
+// pattern or window is a new rule with a fresh counter. The flusher started by Start runs only while
+// a policy is installed, so installing the first policy starts it and removing the last one stops it.
 func (e *Engine) Apply(cfg *config.SDKConfig) error {
 	pol, err := compilePolicy(cfg)
 	if err != nil {
 		return err
 	}
+	e.runMu.Lock()
+	defer e.runMu.Unlock()
 	e.pol.Store(pol)
+	e.syncFlusher()
 	return nil
 }
 
@@ -435,32 +441,47 @@ func (e *Engine) kvClient() (kvstore.KVClient, bool, error) {
 	return client, true, nil
 }
 
-// Start runs the flusher until ctx is cancelled. It writes pending usage on every interval and closes
-// finished windows. Calling Start again while it runs does nothing. The final flush belongs to the
-// owner: call Flush before closing the KV store.
+// Start lets the engine write pending usage to the KV store and close finished windows in the
+// background until ctx is cancelled. The flusher runs only while a policy is installed: Start without
+// budgets spawns nothing, and a later Apply with budgets starts it. Calling Start again replaces the
+// previous run. The final flush belongs to the owner: call Flush before closing the KV store.
 func (e *Engine) Start(ctx context.Context) {
-	e.startMu.Lock()
-	defer e.startMu.Unlock()
-	if e.started {
-		return
-	}
-	e.started = true
-	e.wg.Add(1)
-	go e.run(ctx)
+	e.runMu.Lock()
+	defer e.runMu.Unlock()
+	e.haltFlusher()
+	e.runCtx = ctx
+	e.syncFlusher()
 }
 
-func (e *Engine) run(ctx context.Context) {
-	defer e.wg.Done()
-	defer func() {
-		e.startMu.Lock()
-		e.started = false
-		e.startMu.Unlock()
-	}()
+// syncFlusher starts or stops the flusher so that it runs exactly while the service is running and a
+// policy is installed. The caller holds runMu.
+func (e *Engine) syncFlusher() {
+	want := e.runCtx != nil && e.runCtx.Err() == nil && e.pol.Load() != nil
+	if !want {
+		e.haltFlusher()
+		return
+	}
+	if e.stopRun != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(e.runCtx)
+	e.stopRun = cancel
 	interval := e.interval
 	if interval <= 0 {
 		interval = idleSweepInterval
 	}
 	tick, stop := e.newTicker(interval)
+	go e.run(ctx, tick, stop)
+}
+
+func (e *Engine) haltFlusher() {
+	if e.stopRun != nil {
+		e.stopRun()
+		e.stopRun = nil
+	}
+}
+
+func (e *Engine) run(ctx context.Context, tick <-chan time.Time, stop func()) {
 	defer stop()
 	for {
 		select {
@@ -474,11 +495,9 @@ func (e *Engine) run(ctx context.Context) {
 	}
 }
 
-// Wait blocks until the flusher goroutine started by Start has exited.
-func (e *Engine) Wait() { e.wg.Wait() }
-
 // Flush writes all pending usage to the KV store, then logs and drops counters of closed windows.
-// Failed writes keep their usage pending for the next call. It never panics.
+// Failed writes keep their usage pending for the next call. With no counters it returns at once
+// without touching the KV store. It never panics.
 func (e *Engine) Flush(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -487,6 +506,10 @@ func (e *Engine) Flush(ctx context.Context) (err error) {
 		}
 	}()
 	e.mu.RLock()
+	if len(e.counters) == 0 {
+		e.mu.RUnlock()
+		return nil
+	}
 	all := make([]*counter, 0, len(e.counters))
 	for _, c := range e.counters {
 		all = append(all, c)

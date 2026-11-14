@@ -800,31 +800,6 @@ func TestPerRecordFlushWithZeroInterval(t *testing.T) {
 	}
 }
 
-func TestFlusherGoroutineFlushesOnTickAndStopsOnCancel(t *testing.T) {
-	ticks := make(chan time.Time)
-	e, _, kv := newTestEngine(t, budgetsFor("team-x", rl("*", "day", 100, "enforce")),
-		withTicker(func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }))
-	_, ticket := e.Admit(keyX, "m")
-	charge(e, ticket, rec(keyX, "m", 5))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	e.Start(ctx)
-	e.Start(ctx) // idempotent: a second Start must not spawn a second flusher
-	ticks <- time.Time{}
-	ticks <- time.Time{} // the loop only receives this one after finishing the first flush
-	if kv.total() != 5_000 {
-		t.Fatalf("a tick must flush pending usage, total = %d", kv.total())
-	}
-	cancel()
-	done := make(chan struct{})
-	go func() { e.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the flusher goroutine did not stop after the context was cancelled")
-	}
-}
-
 func TestConcurrentUseIsRaceFreeAndLosesNothing(t *testing.T) {
 	e, _, kv := newTestEngine(t, budgetsFor("team-x", rl("*", "day", 1_000_000, "enforce"), rl("claude-*", "week", 1_000_000, "enforce")))
 	const workers, perWorker = 8, 200

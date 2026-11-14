@@ -88,7 +88,7 @@ func TestStartBudgetsChargesPublishedUsage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	startBudgets(ctx, manager, budgetServiceConfig())
-	t.Cleanup(func() { cancel(); engine.Wait() })
+	t.Cleanup(cancel)
 
 	if !engine.Enabled() {
 		t.Fatal("startBudgets must install the policy of the initial config")
@@ -119,7 +119,7 @@ func TestStartBudgetsIgnoresBudgetsInHomeMode(t *testing.T) {
 	cfg.Home.Enabled = true
 	ctx, cancel := context.WithCancel(context.Background())
 	startBudgets(ctx, usage.NewManager(1), cfg)
-	t.Cleanup(func() { cancel(); engine.Wait() })
+	t.Cleanup(cancel)
 	if engine.Enabled() {
 		t.Fatal("budgets are not supported in Home mode and must not be enforced")
 	}
