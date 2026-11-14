@@ -1,16 +1,19 @@
 package budget
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/MoeForge/moego/ojson"
 )
 
 const (
 	errorType = "rate_limit_error"
 	errorCode = "budget_exhausted"
+	// fallbackBody is returned if building the detailed body fails.
+	fallbackBody = `{"error":{"message":"token budget exhausted","type":"rate_limit_error","code":"budget_exhausted"}}`
 )
 
 // ExhaustedError rejects a request because an enforced budget rule is used up.
@@ -34,15 +37,17 @@ func (e *ExhaustedError) Error() string {
 		message = fmt.Sprintf("token budget exhausted for label %s (models %s, window %s); resets at %s",
 			e.Label, e.Pattern, e.Window, e.ResetAt.UTC().Format(time.RFC3339))
 	}
-	body, err := json.Marshal(map[string]any{"error": map[string]string{
-		"message": message,
-		"type":    errorType,
-		"code":    errorCode,
-	}})
-	if err != nil {
-		return `{"error":{"message":"token budget exhausted","type":"rate_limit_error","code":"budget_exhausted"}}`
+	doc := ojson.NewDocString(`{"error":{}}`)
+	if err := doc.Set("error.message", message); err != nil {
+		return fallbackBody
 	}
-	return string(body)
+	if err := doc.Set("error.type", errorType); err != nil {
+		return fallbackBody
+	}
+	if err := doc.Set("error.code", errorCode); err != nil {
+		return fallbackBody
+	}
+	return doc.String()
 }
 
 // StatusCode reports HTTP 429.
