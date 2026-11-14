@@ -23,8 +23,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -150,9 +152,14 @@ func (h *Handler) Handle(c *gin.Context) {
 	if cfg != nil && auth.RequestScopedErrorConfigFromContext(ctx) == nil {
 		ctx = auth.WithRequestScopedErrorConfig(ctx, cfg)
 	}
+	var sdkCfg *sdkconfig.SDKConfig
+	if cfg != nil {
+		sdkCfg = &cfg.SDKConfig
+	}
 	selectionOpts := coreexecutor.Options{
 		Headers:         c.Request.Header.Clone(),
 		OriginalRequest: reqBody,
+		Metadata:        handlers.AuthSelectionMetadata(ctx, sdkCfg),
 	}
 	sanitizedQuery := sanitizeQuery(c.Request.URL.RawQuery)
 	baseReqHeaders := relayRequestHeaders(c.Request.Header)
