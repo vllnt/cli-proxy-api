@@ -396,6 +396,10 @@ func run() (exitStatus int) {
 			log.Errorf("invalid config from home: %v", errAllowlist)
 			return
 		}
+		if errBudgets := parsed.ValidateHomeAPIKeyBudgets(); errBudgets != nil {
+			log.Errorf("invalid config from home: %v", errBudgets)
+			return
+		}
 		parsed.Port = config.NormalizeHomePort(parsed.Port)
 		parsed.UsageStatisticsEnabled = true
 		pluginSyncCfg := *parsed

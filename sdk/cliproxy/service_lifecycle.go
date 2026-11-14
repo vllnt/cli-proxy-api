@@ -58,6 +58,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	usage.StartDefault(ctx)
 	cfg := s.currentConfig()
+	startBudgets(ctx, usage.DefaultManager(), cfg)
 	homeEnabled := cfg != nil && cfg.Home.Enabled
 	if homeEnabled {
 		s.cfgMu.Lock()
@@ -392,6 +393,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		flushBudgets(ctx)
 		if errShutdownKV := s.shutdownKVStore(); errShutdownKV != nil {
 			log.Errorf("failed to stop local kv store: %v", errShutdownKV)
 			if shutdownErr == nil {

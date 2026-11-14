@@ -241,6 +241,11 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if !reflect.DeepEqual(oldCfg.APIKeyAuthAllowlist, newCfg.APIKeyAuthAllowlist) {
 		changes = append(changes, fmt.Sprintf("api-key-auth-allowlist entries: %d -> %d (contents redacted)", len(oldCfg.APIKeyAuthAllowlist), len(newCfg.APIKeyAuthAllowlist)))
 	}
+	if !reflect.DeepEqual(oldCfg.APIKeyBudgets, newCfg.APIKeyBudgets) {
+		oldLabels, oldRules := apiKeyBudgetCounts(oldCfg.APIKeyBudgets)
+		newLabels, newRules := apiKeyBudgetCounts(newCfg.APIKeyBudgets)
+		changes = append(changes, fmt.Sprintf("api-key-budgets: labels %d -> %d, rules %d -> %d (contents redacted)", oldLabels, newLabels, oldRules, newRules))
+	}
 	if len(oldCfg.GeminiKey) != len(newCfg.GeminiKey) {
 		changes = append(changes, fmt.Sprintf("gemini-api-key count: %d -> %d", len(oldCfg.GeminiKey), len(newCfg.GeminiKey)))
 	} else {
@@ -785,4 +790,16 @@ func formatURL(raw string) string {
 		return host
 	}
 	return scheme + "://" + host
+}
+
+// apiKeyBudgetCounts returns how many labels and rules a budgets config holds.
+func apiKeyBudgetCounts(budgets *config.APIKeyBudgets) (labels, rules int) {
+	if budgets == nil {
+		return 0, 0
+	}
+	for _, labelRules := range budgets.Labels {
+		labels++
+		rules += len(labelRules)
+	}
+	return labels, rules
 }
