@@ -289,7 +289,7 @@ func newBudgetITFixture(t *testing.T, rules ...sdkconfig.APIKeyBudgetRule) *budg
 			c.Set("userApiKey", key)
 		}
 		c.Next()
-	})
+	}, handlers.BudgetHeadersMiddleware())
 	router.POST("/v1/messages", claude.ClaudeMessages)
 	router.POST("/v1/messages/count_tokens", claude.ClaudeCountTokens)
 	return &budgetITFixture{t: t, engine: engine, tap: tap, upstream: upstream, manager: manager, hook: hook, authID: authID, router: router}
@@ -658,7 +658,7 @@ func TestAPIKeyBudgetChargesTheDirectPluginExecutorRoute(t *testing.T) {
 	router.Use(func(c *gin.Context) {
 		c.Set("userApiKey", c.GetHeader("X-Test-Key"))
 		c.Next()
-	})
+	}, handlers.BudgetHeadersMiddleware())
 	router.POST("/v1/chat/completions", openaihandlers.NewOpenAIAPIHandler(base).ChatCompletions)
 	chat := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"`+budgetITFable+`","messages":[{"role":"user","content":"hi"}]}`))

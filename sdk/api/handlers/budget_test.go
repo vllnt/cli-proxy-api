@@ -78,6 +78,7 @@ func budgetRequest(apiKey string) (context.Context, *gin.Context, *httptest.Resp
 	if apiKey != "" {
 		c.Set("userApiKey", apiKey)
 	}
+	BudgetHeadersMiddleware()(c)
 	return context.WithValue(context.Background(), "gin", c), c, recorder
 }
 
@@ -102,7 +103,7 @@ func TestAdmitBudgetIsANoOpWithoutConfiguration(t *testing.T) {
 	if gotCtx != ctx {
 		t.Fatal("AdmitBudget must return the context unchanged when budgets are not configured")
 	}
-	requireNoBudgetHeaders(t, c.Writer.Header())
+	requireNoBudgetHeaders(t, committedHeader(c))
 	requireNoBudgetHeaders(t, recorder.Header())
 }
 
@@ -118,7 +119,7 @@ func TestAdmitBudgetReportsHeadersAndAttachesTicket(t *testing.T) {
 	if budget.TicketFromContext(gotCtx) == nil {
 		t.Fatal("a labelled key must carry an admission ticket")
 	}
-	header := c.Writer.Header()
+	header := committedHeader(c)
 	if got := header.Get("X-Budget-Remaining"); got != "600" {
 		t.Fatalf("X-Budget-Remaining = %q, want 600", got)
 	}
@@ -150,7 +151,7 @@ func TestAdmitBudgetLeavesUnaffectedRequestsAlone(t *testing.T) {
 			if errMsg != nil {
 				t.Fatalf("AdmitBudget() = %+v, want nil", errMsg)
 			}
-			requireNoBudgetHeaders(t, c.Writer.Header())
+			requireNoBudgetHeaders(t, committedHeader(c))
 			if tt.key == budgetKeyLabelled {
 				// A labelled key keeps its ticket so the conductor can still check the upstream model.
 				if budget.TicketFromContext(gotCtx) == nil {
@@ -181,7 +182,7 @@ func TestAdmitBudgetRejectsExhaustedEnforceRule(t *testing.T) {
 	if !errors.As(errMsg.Error, &exhausted) {
 		t.Fatalf("Error = %T, want *budget.ExhaustedError", errMsg.Error)
 	}
-	if got := c.Writer.Header().Get("X-Budget-Remaining"); got != "0" {
+	if got := committedHeader(c).Get("X-Budget-Remaining"); got != "0" {
 		t.Fatalf("X-Budget-Remaining = %q, want 0 on a rejected request", got)
 	}
 
@@ -226,10 +227,10 @@ func TestAdmitBudgetObserveModeNeverRejects(t *testing.T) {
 	if _, errMsg := AdmitBudget(ctx, "claude-fable-5"); errMsg != nil {
 		t.Fatalf("observe mode rejected a request: %+v", errMsg)
 	}
-	if got := c.Writer.Header().Get("X-Budget-Mode"); got != "observe" {
+	if got := committedHeader(c).Get("X-Budget-Mode"); got != "observe" {
 		t.Fatalf("X-Budget-Mode = %q, want observe", got)
 	}
-	if got := c.Writer.Header().Get("X-Budget-Remaining"); got != "0" {
+	if got := committedHeader(c).Get("X-Budget-Remaining"); got != "0" {
 		t.Fatalf("X-Budget-Remaining = %q, want 0 (floored)", got)
 	}
 }
@@ -335,7 +336,7 @@ func TestExecuteEnforcesTheKeyBudgetOnEveryGenerationPath(t *testing.T) {
 		if _, _, errMsg := handler.ExecuteWithAuthManager(ctx, "claude", model, body, ""); errMsg != nil {
 			t.Fatalf("non-stream: %+v", errMsg)
 		}
-		if got := c.Writer.Header().Get("X-Budget-Remaining"); got != "1000" {
+		if got := committedHeader(c).Get("X-Budget-Remaining"); got != "1000" {
 			t.Fatalf("X-Budget-Remaining = %q, want 1000", got)
 		}
 		ctx, _, _ = budgetRequest(budgetKeyLabelled)
@@ -385,7 +386,7 @@ func TestExecuteEnforcesTheKeyBudgetOnEveryGenerationPath(t *testing.T) {
 		if _, _, errMsg := handler.ExecuteCountWithAuthManager(ctx, "claude", model, body, ""); errMsg != nil {
 			t.Fatalf("ExecuteCountWithAuthManager() = %+v, want it admitted", errMsg)
 		}
-		requireNoBudgetHeaders(t, c.Writer.Header())
+		requireNoBudgetHeaders(t, committedHeader(c))
 		if exec.counts.Load() != 1 {
 			t.Fatalf("count executions = %d, want 1", exec.counts.Load())
 		}
@@ -396,7 +397,7 @@ func TestExecuteEnforcesTheKeyBudgetOnEveryGenerationPath(t *testing.T) {
 		if _, _, errMsg := handler.ExecuteWithAuthManager(ctx, "claude", model, body, ""); errMsg != nil {
 			t.Fatalf("ExecuteWithAuthManager() = %+v", errMsg)
 		}
-		requireNoBudgetHeaders(t, c.Writer.Header())
+		requireNoBudgetHeaders(t, committedHeader(c))
 	})
 }
 

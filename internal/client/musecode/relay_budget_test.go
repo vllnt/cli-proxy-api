@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/budget"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
@@ -58,7 +59,7 @@ func TestRelayHonorsClientKeyBudget(t *testing.T) {
 	router.Use(func(c *gin.Context) {
 		c.Set("userApiKey", c.GetHeader("X-Test-Client-Key"))
 		c.Next()
-	})
+	}, handlers.BudgetHeadersMiddleware())
 	router.Any("/muse-code/*path", handler.Handle)
 	search := func(clientKey string) *httptest.ResponseRecorder {
 		t.Helper()

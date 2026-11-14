@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -36,9 +35,6 @@ func (h *BaseAPIHandler) ExecuteStreamWithPreFTKeepAlive(
 		errs    <-chan *interfaces.ErrorMessage
 	}
 	bootstrapResult := make(chan streamBootstrapResult, 1)
-	// The bootstrap goroutine may set budget headers on the response while this goroutine writes
-	// keep-alives; the guard orders the two.
-	guard := guardResponseWriter(c)
 	go func() {
 		data, headers, errs := h.ExecuteStreamWithAuthManager(cliCtx, handlerType, modelName, rawJSON, alt)
 		bootstrapResult <- streamBootstrapResult{data: data, headers: headers, errs: errs}
@@ -55,7 +51,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithPreFTKeepAlive(
 		case result := <-bootstrapResult:
 			return result.data, result.headers, result.errs, true
 		case <-keepAliveC:
-			if writeKeepAlive != nil && !writeGuarded(guard, writeKeepAlive) {
+			if writeKeepAlive != nil && !writeKeepAlive() {
 				if cliCancel != nil {
 					cliCancel(context.Canceled)
 				}
@@ -64,12 +60,6 @@ func (h *BaseAPIHandler) ExecuteStreamWithPreFTKeepAlive(
 			}
 		}
 	}
-}
-
-func writeGuarded(guard *sync.Mutex, write func() bool) bool {
-	guard.Lock()
-	defer guard.Unlock()
-	return write()
 }
 
 // PendingStreamError returns an immediately available non-nil stream error.

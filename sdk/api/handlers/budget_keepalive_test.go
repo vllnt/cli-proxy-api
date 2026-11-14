@@ -37,6 +37,7 @@ func budgetRequestOn(w http.ResponseWriter, apiKey string) (context.Context, *gi
 	if apiKey != "" {
 		c.Set("userApiKey", apiKey)
 	}
+	BudgetHeadersMiddleware()(c)
 	return context.WithValue(context.Background(), "gin", c), c
 }
 
@@ -116,7 +117,7 @@ func TestStreamKeepAliveDoesNotRaceWithBudgetAdmission(t *testing.T) {
 	streamWithKeepAlive(t, handler, model, keepAliveC, func() { once.Do(func() { close(keepAliveWritten) }) })
 }
 
-func TestStreamKeepAliveKeepsBudgetHeadersUntilTheResponseStarts(t *testing.T) {
+func TestStreamKeepAliveCarriesBudgetHeadersWhenAdmissionPrecedesTheCommit(t *testing.T) {
 	const model = "claude-fable-keepalive-headers"
 	installBudgetEngine(t, fableBudget("enforce", 1000))
 	handler, _ := newBudgetHandlerFixture(t, model, budgetTestConfig(fableBudget("enforce", 1000)))
@@ -126,7 +127,7 @@ func TestStreamKeepAliveKeepsBudgetHeadersUntilTheResponseStarts(t *testing.T) {
 	if c.Writer.Written() {
 		t.Fatal("no keep-alive was due, the response must not have started")
 	}
-	if got := c.Writer.Header().Get("X-Budget-Remaining"); got != "1000" {
+	if got := committedHeader(c).Get("X-Budget-Remaining"); got != "1000" {
 		t.Fatalf("X-Budget-Remaining = %q, want 1000", got)
 	}
 	if recorder.Body.Len() != 0 {
@@ -168,7 +169,7 @@ func TestNonStreamKeepAliveDoesNotRaceWithBudgetAdmission(t *testing.T) {
 	}
 }
 
-func TestNonStreamKeepAliveKeepsBudgetHeadersUntilTheResponseStarts(t *testing.T) {
+func TestNonStreamKeepAliveCarriesBudgetHeadersWhenAdmissionPrecedesTheCommit(t *testing.T) {
 	const model = "claude-fable-keepalive-nonstream-headers"
 	handler, _ := nonStreamKeepAliveFixture(t, model)
 	recorder := httptest.NewRecorder()
@@ -184,7 +185,7 @@ func TestNonStreamKeepAliveKeepsBudgetHeadersUntilTheResponseStarts(t *testing.T
 	if c.Writer.Written() {
 		t.Fatal("the request finished before the first keep-alive, the response must not have started")
 	}
-	if got := c.Writer.Header().Get("X-Budget-Remaining"); got != "1000" {
+	if got := committedHeader(c).Get("X-Budget-Remaining"); got != "1000" {
 		t.Fatalf("X-Budget-Remaining = %q, want 1000", got)
 	}
 }

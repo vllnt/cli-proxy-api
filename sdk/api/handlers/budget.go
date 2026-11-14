@@ -57,30 +57,29 @@ func AdmitBudget(ctx context.Context, model string) (outCtx context.Context, err
 	return outCtx, nil
 }
 
-// setBudgetHeaders reports the matching rule with the least budget left, on streaming and non-streaming
-// responses alike. Headers cannot change once the response has started, so a response a keep-alive
-// already started goes without, and so do websocket turns.
-//
-// Admission can run while a keep-alive goroutine writes the same response. The writer guard orders the
-// two, and a keep-alive that holds it is committing the response, so there is nothing left to set.
+// setBudgetHeaders records the matching rule with the least budget left, to be sent on streaming and
+// non-streaming responses alike. It never touches the response, because admission can run on a
+// goroutine that races a keep-alive writer: BudgetHeadersMiddleware's writer sets the headers when the
+// response is committed. A response a keep-alive already started goes without, and so do websocket
+// turns and requests that never went through the middleware.
 func setBudgetHeaders(ctx context.Context, decision budget.Decision) {
 	ginCtx, ok := ctx.Value("gin").(*gin.Context)
-	if !ok || ginCtx == nil || ginCtx.Writer == nil {
+	if !ok || ginCtx == nil {
 		return
 	}
-	if guard := responseWriterGuard(ginCtx); guard != nil {
-		if !guard.TryLock() {
-			return
-		}
-		defer guard.Unlock()
-	}
-	if ginCtx.Writer.Written() {
+	value, found := ginCtx.Get(budgetHeadersKey)
+	if !found {
 		return
 	}
-	header := ginCtx.Writer.Header()
+	holder, ok := value.(*budgetHeaders)
+	if !ok {
+		return
+	}
+	header := make(http.Header, 3)
 	header.Set(budgetRemainingHeader, strconv.FormatInt(max(decision.RemainingTokens, 0), 10))
 	header.Set(budgetResetHeader, decision.ResetAt.UTC().Format(time.RFC3339))
 	header.Set(budgetModeHeader, decision.Mode)
+	holder.store(header)
 }
 
 // WriteBudgetError answers err as a rejected token budget: HTTP 429, Retry-After and the JSON error
