@@ -87,6 +87,10 @@ On a request that matches a rule, the rule with the **least remaining** is repor
 Keys without a label, models no rule matches and deployments without budgets get no `X-Budget-*`
 header. The three headers are reserved, so an upstream cannot spoof them.
 
+The headers are sent when the response starts. A keep-alive that starts the response before the request
+has been admitted (non-stream keep-alive, or keep-alive before the first token) goes without them, because
+headers cannot change after the first byte.
+
 A rejected request gets HTTP 429, `Retry-After` in whole seconds, and an error body that names the label
 and the rule, never the key:
 
@@ -126,9 +130,11 @@ Changing a rule's `models` or `window` starts a new counter, because those defin
   interval. Writing each record to bbolt measured about 105,750 ns against about 743 ns batched, which is
   why writes are batched.
 - **Shutdown.** The usage manager stops first and delivers the records still queued, so they are charged;
-  then the counters are flushed and the KV store closes. Both waits are capped at 5 seconds, so a stuck
-  usage plugin or a stalled store cannot hold shutdown. If the flush has not finished by then, the store
-  is left open for the process exit to reclaim.
+  then the counters are flushed and the KV store closes. Shutdown may therefore wait up to 5 seconds for
+  the usage queue to drain, and up to 5 seconds more for the flush. The limits are their own, so a stuck
+  usage plugin or a stalled store cannot hold shutdown, and they apply even when the shutdown context has
+  already ended. If the flush has not finished by then, the store is left open for the process exit to
+  reclaim. Without budgets shutdown waits for neither.
 - **The engine fails open.** KV errors, a corrupt counter, a panic or an invalid policy never reject a
   request; they are logged and the request runs. Only a used-up enforce rule rejects.
 - No config means the policy is absent: admission is a nil check (about 35 ns, no allocations). The
