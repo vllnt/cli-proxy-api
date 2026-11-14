@@ -104,6 +104,28 @@ func TestV8ExampleLoadsAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestV8ShutdownTimeoutParse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"v8 nested", "server:\n  shutdown-timeout: 15\n", 15},
+		{"legacy top-level", "shutdown-timeout: 7\n", 7},
+		{"absent defaults to zero", "server:\n  port: 8317\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ParseConfigBytes([]byte(tc.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ShutdownTimeoutSeconds != tc.want {
+				t.Fatalf("ShutdownTimeoutSeconds = %d, want %d", cfg.ShutdownTimeoutSeconds, tc.want)
+			}
+		})
+	}
+}
+
 func TestV8PresencePrecedenceAndCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
@@ -525,10 +547,10 @@ func TestV8MigrationPreservesEmptyLegacyContainers(t *testing.T) {
 		{"streaming", "requests.streaming"}, {"payload", "requests.payload"},
 		{"codex", "oauth.providers.codex"}, {"codex.live-media-relay", "oauth.providers.codex.live-media-relay"},
 		{"codex-header-defaults", "oauth.providers.codex.header-defaults"},
-		{"claude", "oauth.providers.claude"}, {"claude-code", "oauth.providers.claude.claude-code"},
-		{"claude-header-defaults", "oauth.providers.claude.header-defaults"},
+		{"claude", "upstream.claude"}, {"claude-code", "upstream.claude"},
+		{"claude-header-defaults", "upstream.claude.header-defaults"},
 		{"antigravity", "oauth.providers.antigravity"}, {"antigravity.connection-pool", "oauth.providers.antigravity.connection-pool"},
-		{"xai", "oauth.providers.xai"}, {"devin", "oauth.providers.devin"},
+		{"xai", "upstream.xai"}, {"devin", "oauth.providers.devin"},
 	} {
 		for _, empty := range []string{"{}", "null"} {
 			t.Run(section.old+"/"+empty, func(t *testing.T) {
@@ -931,5 +953,35 @@ func TestV8SecretHashResolvesReferences(t *testing.T) {
 				t.Fatalf("second load changed the persisted hash or settings: %v", err)
 			}
 		})
+	}
+}
+
+func TestV8ExampleDocumentsSessionAffinityCompactionGuidance(t *testing.T) {
+	example, errRead := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if errRead != nil {
+		t.Fatal(errRead)
+	}
+	var doc yaml.Node
+	if errUnmarshal := yaml.Unmarshal(example, &doc); errUnmarshal != nil {
+		t.Fatal(errUnmarshal)
+	}
+	routing := yamlPath(doc.Content[0], "routing")
+	if routing == nil {
+		t.Fatal("config.example.yaml is missing routing block")
+	}
+	idx := findMapKeyIndex(routing, "session-affinity")
+	if idx < 0 {
+		t.Fatal("config.example.yaml is missing routing.session-affinity")
+	}
+	comment := routing.Content[idx].HeadComment
+	for _, required := range []string{
+		"Merkle LCP prefix/compaction matching",
+		"2 shared trailing turns",
+		"replaces all earlier turns with a summary",
+		"send X-Session-ID",
+	} {
+		if !strings.Contains(comment, required) {
+			t.Fatalf("routing.session-affinity comment in config.example.yaml is missing %q; got:\n%s", required, comment)
+		}
 	}
 }

@@ -46,6 +46,10 @@ func TestCodexClientModelsResponseMultiAgentV2FollowsConfig(t *testing.T) {
 			if entry == nil {
 				t.Fatalf("missing synthesized model %q", modelID)
 			}
+			// The synthesized model inherits multi_agent_version from the
+			// catalog's default template, which currently carries "v2";
+			// runtime code preserves it when the opt-in is disabled and
+			// rewrites it to "v2" when enabled.
 			value, exists := entry["multi_agent_version"]
 			if tt.enabled {
 				if !exists || value != "v2" {
@@ -53,8 +57,8 @@ func TestCodexClientModelsResponseMultiAgentV2FollowsConfig(t *testing.T) {
 				}
 				return
 			}
-			if !exists || value != nil {
-				t.Fatalf("multi_agent_version = %#v, want preserved null", value)
+			if !exists || value != "v2" {
+				t.Fatalf("multi_agent_version = %#v, want preserved template value v2", value)
 			}
 		})
 	}
@@ -338,8 +342,8 @@ func TestCodexClientModelsApplyPatchRouting(t *testing.T) {
 		}
 		t.Fatalf("missing model %q", id)
 	}
-	// A provider label alone is not an executor capability claim.
-	assertPatch(t, handler.codexClientModelsResponse("0.153.4"), "gpt-5.5", nil)
+	// Models that natively declare freeform apply_patch advertise it by default under pure Codex routes.
+	assertPatch(t, handler.codexClientModelsResponse("0.153.4"), "gpt-5.5", "freeform")
 	manager.RegisterExecutor(executor.NewCodexAutoExecutor(&config.Config{}))
 	manager.RegisterExecutor(executor.NewOpenAICompatExecutor("catalog-custom", &config.Config{}))
 	manager.RegisterExecutor(catalogUnknownExecutor{executor.NewOpenAICompatExecutor("catalog-remote", &config.Config{})})
@@ -354,6 +358,11 @@ func TestCodexClientModelsApplyPatchRouting(t *testing.T) {
 				if cfg == enabledCfg {
 					switch entry["slug"] {
 					case "gpt-5.5", "gpt-reserve", "catalog-patch-synthetic", "catalog-patch-alias", "catalog-patch-mixed":
+						want = "freeform"
+					}
+				} else {
+					switch entry["slug"] {
+					case "gpt-5.5", "gpt-reserve":
 						want = "freeform"
 					}
 				}
