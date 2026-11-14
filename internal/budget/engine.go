@@ -171,8 +171,10 @@ func (e *Engine) Apply(cfg *config.SDKConfig) error {
 }
 
 // preload creates the current-window counter of every rule, which starts loading its persisted total,
-// so the first request after a start or reload is checked against that total instead of an empty
-// counter. It never panics.
+// so the first request after a start is checked against that total instead of an empty counter. The
+// load is asynchronous: a request that arrives before it finishes (normally milliseconds), or before a
+// KV store that the same reload enables is open, is checked against what this process has charged. It
+// never panics.
 func (e *Engine) preload(pol *policy) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -527,12 +529,13 @@ func (e *Engine) run(ctx context.Context, tick <-chan time.Time, stop func()) {
 
 // Flush writes all pending usage to the KV store, then logs and drops counters of closed windows.
 // It is the final flush before the store closes, so it also writes counters whose persisted total has
-// not loaded. Failed writes keep their usage pending for the next call. With no counters it returns at
-// once without touching the KV store. It never panics.
+// not loaded. Failed writes keep their usage pending for the next call. Counters with nothing pending are
+// not written. It never panics.
 func (e *Engine) Flush(ctx context.Context) error { return e.flush(ctx, true) }
 
 // HasCounters reports whether the engine tracks any usage, that is, whether a flush has anything to
-// write. An engine that never had a policy, or whose keys never made a request, has none.
+// write. An engine that never had a policy has none; Apply creates the current-window counter of every
+// rule.
 func (e *Engine) HasCounters() bool {
 	if e == nil {
 		return false

@@ -143,7 +143,8 @@ Changing a rule's `models` or `window` starts a new counter, because those defin
   and stops the flusher; adding budgets back starts it.
 - Nothing blocks the request path or the usage dispatcher on I/O: admission and charging use in-memory
   counters. KV access happens in the background, in the flusher and in a one-off read of a counter's saved
-  total the first time that counter is used. Until that read finishes (normally milliseconds) the counter
+  total when the policy is applied (at start and at each reload) or when a new window opens.
+  Until that read finishes (normally milliseconds) the counter
   holds only what this process has charged; the saved total is added when it arrives, so nothing is lost
   or counted twice. Usage is not written to the store before the read has succeeded, and a failed read is
   retried on the following flushes until it does.
