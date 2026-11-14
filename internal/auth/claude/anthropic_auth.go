@@ -34,6 +34,10 @@ const (
 	RedirectURI      = "http://localhost:54545/callback"
 	ClaudeOAuthScope = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
+	// Native Claude Code includes the Console scope when authorizing a new login.
+	// Keep the established token refresh scope unchanged.
+	claudeOAuthAuthorizeScope = "org:create_api_key " + ClaudeOAuthScope
+
 	claudeRefreshMinBackoff       = 5 * time.Second
 	claudeRefreshMaxBackoff       = 5 * time.Minute
 	claudeRefreshTimeout          = 30 * time.Second
@@ -120,7 +124,11 @@ func isClaudeRefreshRetryable(err error) bool {
 	if errors.As(err, &httpErr) {
 		return httpErr.Retryable()
 	}
-	return true
+	// A transport or response-decoding error is ambiguous: Anthropic may have
+	// consumed the single-use refresh token even though the response was lost.
+	// Retrying the same token can turn a transient network fault into
+	// invalid_grant. Only explicit retryable HTTP responses are safe to replay.
+	return false
 }
 
 // tokenResponse represents the response structure from Anthropic's OAuth token endpoint.
@@ -326,7 +334,7 @@ func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string
 		"client_id":             {ClientID},
 		"response_type":         {"code"},
 		"redirect_uri":          {RedirectURI},
-		"scope":                 {ClaudeOAuthScope},
+		"scope":                 {claudeOAuthAuthorizeScope},
 		"code_challenge":        {pkceCodes.CodeChallenge},
 		"code_challenge_method": {"S256"},
 		"state":                 {state},
