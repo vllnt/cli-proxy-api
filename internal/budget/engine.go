@@ -137,10 +137,23 @@ func New(opts ...Option) *Engine {
 	return e
 }
 
-var defaultEngine = New()
+var defaultEngine atomic.Pointer[Engine]
+
+func init() { defaultEngine.Store(New()) }
 
 // Default returns the process-wide engine used by the API handlers, executors and usage manager.
-func Default() *Engine { return defaultEngine }
+func Default() *Engine { return defaultEngine.Load() }
+
+// SetDefault installs e as the process-wide engine and returns the engine it replaced. A nil e is
+// ignored so Default never returns nil. It lets tests and embedders inject a clock or storage; call it
+// before the server starts handling requests.
+func SetDefault(e *Engine) *Engine {
+	previous := Default()
+	if e != nil {
+		defaultEngine.Store(e)
+	}
+	return previous
+}
 
 // Apply compiles the config and installs it for all later requests. A nil config, or one without
 // rules, disables budgets. An invalid config is reported and the previous policy stays active.
@@ -154,6 +167,10 @@ func (e *Engine) Apply(cfg *config.SDKConfig) error {
 	e.pol.Store(pol)
 	return nil
 }
+
+// Enabled reports whether any budget rule is active. Callers use it to skip all budget work, so a
+// deployment without budgets pays one atomic load per request.
+func (e *Engine) Enabled() bool { return e != nil && e.pol.Load() != nil }
 
 // Decision is the outcome of Admit.
 type Decision struct {

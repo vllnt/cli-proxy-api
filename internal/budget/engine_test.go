@@ -862,3 +862,37 @@ func TestConcurrentUseIsRaceFreeAndLosesNothing(t *testing.T) {
 		t.Fatalf("persisted total = %d, want %d", kv.total(), want)
 	}
 }
+
+func TestEnabledFollowsPolicy(t *testing.T) {
+	e := New()
+	if e.Enabled() {
+		t.Fatal("a new engine has no policy")
+	}
+	if err := e.Apply(sdkConfig(budgetsFor("team-x", rl("*", "day", 1, "enforce")))); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Enabled() {
+		t.Fatal("Apply with rules must enable the engine")
+	}
+	if err := e.Apply(sdkConfig(&config.APIKeyBudgets{Mode: "enforce"})); err != nil {
+		t.Fatal(err)
+	}
+	if e.Enabled() {
+		t.Fatal("a config without rules must disable the engine")
+	}
+}
+
+func TestSetDefaultSwapsTheProcessEngine(t *testing.T) {
+	original := Default()
+	replacement := New()
+	if previous := SetDefault(replacement); previous != original {
+		t.Fatal("SetDefault must return the engine it replaced")
+	}
+	t.Cleanup(func() { SetDefault(original) })
+	if Default() != replacement {
+		t.Fatal("Default must return the installed engine")
+	}
+	if SetDefault(nil); Default() != replacement {
+		t.Fatal("SetDefault(nil) must be ignored so Default never returns nil")
+	}
+}
