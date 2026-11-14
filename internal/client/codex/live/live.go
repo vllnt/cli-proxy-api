@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/budget"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -488,7 +489,11 @@ func mediaCredentialName(selected *auth.Auth, authIndex string) string {
 }
 
 func (h *Handler) selectOAuth(ctx context.Context, model string, opts coreexecutor.Options) (*auth.HomeDispatchSelection, *auth.Auth, error) {
-	// Every live selection honors the calling client API key's credential allowlist.
+	// Every live selection is judged against the calling client API key's token budget...
+	if _, errBudget := handlers.AdmitBudget(ctx, model); errBudget != nil {
+		return nil, nil, errBudget.Error
+	}
+	// ...and honors its credential allowlist.
 	if cfg := h.currentConfig(); cfg != nil {
 		if restrictions := handlers.AuthSelectionMetadata(ctx, &cfg.SDKConfig); len(restrictions) > 0 {
 			merged := maps.Clone(opts.Metadata)
@@ -851,6 +856,12 @@ func writeSelectionError(c *gin.Context, err error) {
 	status := clienterror.HTTPStatusFromErrorOr(err, http.StatusServiceUnavailable)
 	for _, value := range auth.SafeResponseHeaders(err).Values("Retry-After") {
 		c.Writer.Header().Add("Retry-After", value)
+	}
+	var exhausted *budget.ExhaustedError
+	if errors.As(err, &exhausted) {
+		// A budget error is already a client-ready JSON error body; keep its code on every route.
+		c.Data(status, "application/json", []byte(err.Error()))
+		return
 	}
 	writeLiveError(c, status, err.Error())
 }
