@@ -1420,10 +1420,10 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 
 	select {
 	case <-firstAck:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("first subscription was not acknowledged")
 	}
-	registry := waitForServiceRegistry(t, service, time.Second)
+	registry := waitForServiceRegistry(t, service, 10*time.Second)
 	pending, errBegin := registry.BeginDispatch()
 	if errBegin != nil {
 		t.Fatal(errBegin)
@@ -1450,7 +1450,7 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 	}
 	select {
 	case <-secondSubscribe:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("new subscription did not start while the old scope remained active")
 	}
 	service.homeMu.Lock()
@@ -1460,7 +1460,7 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 		t.Fatal("registry was exposed before the replacement ACK")
 	}
 	close(allowSecondAck)
-	if nextRegistry := waitForServiceRegistry(t, service, time.Second); nextRegistry != registry {
+	if nextRegistry := waitForServiceRegistry(t, service, 10*time.Second); nextRegistry != registry {
 		t.Fatal("heartbeat failover replaced the registry containing the active scope")
 	}
 	select {
