@@ -18,7 +18,7 @@ func benchEngine(b *testing.B, interval time.Duration) (*Engine, *Ticket, usage.
 	}
 	b.Cleanup(func() { _ = store.Close() })
 	clock := newFakeClock(saturdayNoon)
-	e := New(WithClock(clock.Now), staticKV(store), WithFlushInterval(interval))
+	e := New(WithClock(clock.Now), staticKV(store), WithFlushInterval(interval), withInlineLoads())
 	budgets := budgetsFor("team-x",
 		rl("claude-fable-*", "week", 1<<40, "enforce"),
 		rl("*", "day", 1<<40, "enforce"),

@@ -55,6 +55,10 @@ type fakeKV struct {
 	incrPanic  bool
 	incrCalls  int
 	expireCall int
+	getCalls   int
+	// getGate, when set, makes KVGet report on getStarted and block until the gate is closed.
+	getGate    chan struct{}
+	getStarted chan struct{}
 }
 
 func newFakeKV() *fakeKV {
@@ -62,6 +66,17 @@ func newFakeKV() *fakeKV {
 }
 
 func (f *fakeKV) KVGet(_ context.Context, key string) ([]byte, bool, error) {
+	f.mu.Lock()
+	f.getCalls++
+	gate, started := f.getGate, f.getStarted
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.getPanic {
@@ -140,7 +155,7 @@ func newTestEngine(t *testing.T, budgets *config.APIKeyBudgets, opts ...Option) 
 	t.Helper()
 	clock := newFakeClock(saturdayNoon)
 	kv := newFakeKV()
-	base := []Option{WithClock(clock.Now), staticKV(kv), WithFlushInterval(time.Hour)}
+	base := []Option{WithClock(clock.Now), staticKV(kv), WithFlushInterval(time.Hour), withInlineLoads()}
 	e := New(append(base, opts...)...)
 	if err := e.Apply(sdkConfig(budgets)); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -723,7 +738,7 @@ func TestRestartKeepsCountersWithBoltStore(t *testing.T) {
 	clock := newFakeClock(saturdayNoon)
 	cfg := sdkConfig(budgetsFor("team-x", rl("claude-fable-*", "week", 100, "enforce")))
 	newEngine := func() *Engine {
-		e := New(WithClock(clock.Now), staticKV(store), WithFlushInterval(time.Hour))
+		e := New(WithClock(clock.Now), staticKV(store), WithFlushInterval(time.Hour), withInlineLoads())
 		if applyErr := e.Apply(cfg); applyErr != nil {
 			t.Fatal(applyErr)
 		}

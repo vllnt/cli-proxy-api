@@ -47,13 +47,16 @@ type counterKey struct {
 }
 
 // counter holds one rule's usage in one window. used is the running total (persisted base plus
-// everything charged here); pending is the part not yet written to the KV store.
+// everything charged here); pending is the part not yet written to the KV store. The persisted base is
+// added once, in the background (loading marks an attempt in flight, loaded that it succeeded), so
+// until it arrives used holds only what this process charged.
 type counter struct {
 	label, pattern, window string
 	kvKey                  string
 	end                    time.Time
 
-	loadOnce    sync.Once
+	loaded      atomic.Bool
+	loading     atomic.Bool
 	used        atomic.Int64
 	pending     atomic.Int64
 	limit       atomic.Int64
@@ -71,6 +74,8 @@ type Engine struct {
 	kv        func() (kvstore.KVClient, bool, error)
 	interval  time.Duration
 	newTicker func(time.Duration) (<-chan time.Time, func())
+	// spawn runs a background load. Production starts a goroutine; tests can run it inline.
+	spawn func(func())
 
 	mu       sync.RWMutex
 	counters map[counterKey]*counter
@@ -119,6 +124,11 @@ func withTicker(fn func(time.Duration) (<-chan time.Time, func())) Option {
 	return func(e *Engine) { e.newTicker = fn }
 }
 
+// withInlineLoads runs counter loads on the calling goroutine so a test sees their effect at once.
+func withInlineLoads() Option {
+	return func(e *Engine) { e.spawn = func(f func()) { f() } }
+}
+
 func realTicker(d time.Duration) (<-chan time.Time, func()) {
 	t := time.NewTicker(d)
 	return t.C, t.Stop
@@ -131,6 +141,7 @@ func New(opts ...Option) *Engine {
 		kv:        kvstore.CurrentKVClient,
 		interval:  DefaultFlushInterval,
 		newTicker: realTicker,
+		spawn:     func(f func()) { go f() },
 		counters:  make(map[counterKey]*counter),
 	}
 	for _, opt := range opts {
@@ -369,13 +380,15 @@ func (e *Engine) HandleUsage(ctx context.Context, record usage.Record) {
 	}
 }
 
-// counter returns the counter for a rule and window, creating it on first use. The first use of a
-// counter reads its persisted total once; every later call is a map lookup and atomic stores.
+// counter returns the counter for a rule and window, creating it on first use. Creating one only
+// schedules the read of its persisted total in the background; every call, first or not, is a map
+// lookup and atomic stores, so no request ever waits for the store.
 func (e *Engine) counter(label string, r *rule, start, end time.Time) *counter {
 	key := counterKey{label: label, ruleID: r.id, start: start.Unix()}
 	e.mu.RLock()
 	c := e.counters[key]
 	e.mu.RUnlock()
+	created := false
 	if c == nil {
 		e.mu.Lock()
 		if c = e.counters[key]; c == nil {
@@ -387,18 +400,28 @@ func (e *Engine) counter(label string, r *rule, start, end time.Time) *counter {
 				kvKey:   "budget:v1:" + kvstore.HashKeyPart(label) + ":" + r.id + ":" + strconv.FormatInt(key.start, 10),
 			}
 			e.counters[key] = c
+			created = true
 		}
 		e.mu.Unlock()
 	}
 	c.limit.Store(r.limitMilli)
 	c.observe.Store(!r.enforce)
-	c.loadOnce.Do(func() { e.load(c) })
+	if created {
+		e.spawn(func() { e.tryLoad(c) })
+	}
 	return c
 }
 
-// load reads the persisted total of a new counter. Any failure leaves it at zero: the request is
-// admitted and later flushes still add to whatever the store holds.
-func (e *Engine) load(c *counter) {
+// tryLoad adds the persisted total of c to its in-memory total, once. It runs off the request path.
+// Usage charged meanwhile stays in used and in pending, which is not written until the load has
+// succeeded, so the persisted total is neither double counted nor lost. A missing store or a failed read
+// leaves c unloaded for a later flush to retry. At most one attempt per counter runs at a time. It never
+// panics.
+func (e *Engine) tryLoad(c *counter) {
+	if c.loaded.Load() || !c.loading.CompareAndSwap(false, true) {
+		return
+	}
+	defer c.loading.Store(false)
 	defer func() {
 		if r := recover(); r != nil {
 			e.recovered("load", r)
@@ -406,7 +429,7 @@ func (e *Engine) load(c *counter) {
 	}()
 	client, ok, err := e.kvClient()
 	if err != nil {
-		e.warn("budget: kv store unavailable, counter starts empty", err)
+		e.warn("budget: kv store unavailable, a counter is not loaded yet", err)
 		return
 	}
 	if !ok {
@@ -414,16 +437,23 @@ func (e *Engine) load(c *counter) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), loadTimeout)
 	defer cancel()
-	raw, found, err := client.KVGet(ctx, c.kvKey)
-	if err != nil {
-		e.warn("budget: reading a counter failed, it starts empty", err)
+	raw, found, errGet := client.KVGet(ctx, c.kvKey)
+	if errGet != nil {
+		e.warn("budget: reading a counter failed, it is retried on the next flush", errGet)
 		return
 	}
-	if !found {
-		return
+	if found {
+		if n, errParse := strconv.ParseInt(string(bytes.TrimSpace(raw)), 10, 64); errParse == nil && n > 0 {
+			satAdd(&c.used, n)
+		}
 	}
-	if n, parseErr := strconv.ParseInt(string(bytes.TrimSpace(raw)), 10, 64); parseErr == nil && n > 0 {
-		c.used.Store(n)
+	c.loaded.Store(true)
+}
+
+// retryLoad starts another load attempt for c when it is not loaded and none is running.
+func (e *Engine) retryLoad(c *counter) {
+	if !c.loaded.Load() && !c.loading.Load() {
+		e.spawn(func() { e.tryLoad(c) })
 	}
 }
 
@@ -488,7 +518,7 @@ func (e *Engine) run(ctx context.Context, tick <-chan time.Time, stop func()) {
 		case <-ctx.Done():
 			return
 		case <-tick:
-			if err := e.Flush(ctx); err != nil {
+			if err := e.flush(ctx, false); err != nil {
 				e.warn("budget: flush failed, usage is kept in memory and retried", err)
 			}
 		}
@@ -496,9 +526,15 @@ func (e *Engine) run(ctx context.Context, tick <-chan time.Time, stop func()) {
 }
 
 // Flush writes all pending usage to the KV store, then logs and drops counters of closed windows.
-// Failed writes keep their usage pending for the next call. With no counters it returns at once
-// without touching the KV store. It never panics.
-func (e *Engine) Flush(ctx context.Context) (err error) {
+// It is the final flush before the store closes, so it also writes counters whose persisted total has
+// not loaded. Failed writes keep their usage pending for the next call. With no counters it returns at
+// once without touching the KV store. It never panics.
+func (e *Engine) Flush(ctx context.Context) error { return e.flush(ctx, true) }
+
+// flush is Flush. The periodic flusher passes final=false, which holds back counters that are not
+// loaded yet and retries their load: writing usage before the persisted total is known would count it
+// twice once the total arrives.
+func (e *Engine) flush(ctx context.Context, final bool) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.recovered("flush", r)
@@ -523,6 +559,12 @@ func (e *Engine) Flush(ctx context.Context) (err error) {
 	if ok {
 		now := e.now()
 		for _, c := range all {
+			if !final && !c.loaded.Load() {
+				e.retryLoad(c)
+				if !c.loaded.Load() {
+					continue
+				}
+			}
 			if flushErr := e.flushCounter(ctx, client, c, now); flushErr != nil && err == nil {
 				err = flushErr
 			}
@@ -534,6 +576,9 @@ func (e *Engine) Flush(ctx context.Context) (err error) {
 
 // flushNow writes one counter immediately (flush interval 0).
 func (e *Engine) flushNow(c *counter) {
+	if !c.loaded.Load() {
+		return
+	}
 	client, ok, err := e.kvClient()
 	if err != nil {
 		e.warn("budget: kv store unavailable, usage is kept in memory", err)

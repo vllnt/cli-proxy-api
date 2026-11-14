@@ -162,9 +162,17 @@ func TestShutdownFlushesPendingBudgetUsage(t *testing.T) {
 	if err := restarted.Apply(&cfg.SDKConfig); err != nil {
 		t.Fatal(err)
 	}
-	dec, _ := restarted.Admit(budgetServiceKey, "claude-fable-5")
-	if dec.RemainingTokens != 1_300_000 {
-		t.Fatalf("remaining after restart = %d, want 1300000: Shutdown did not flush pending usage", dec.RemainingTokens)
+	// The persisted total is read in the background, so the first admissions still see the full limit.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		dec, _ := restarted.Admit(budgetServiceKey, "claude-fable-5")
+		if dec.RemainingTokens == 1_300_000 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("remaining after restart = %d, want 1300000: Shutdown did not flush pending usage", dec.RemainingTokens)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
