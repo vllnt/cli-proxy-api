@@ -11,15 +11,22 @@ jobs:
   ensure-no-translator-changes:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Detect internal/translator changes
         id: changed-files
-        uses: tj-actions/changed-files@v45
-        with:
-          files: |
-            internal/translator/**
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed="$(git diff --name-only --no-renames "${BASE_SHA}...${HEAD_SHA}" -- internal/translator/)"
+          if [ -n "${changed}" ]; then
+            echo "any_changed=true" >> "${GITHUB_OUTPUT}"
+            echo "${changed}"
+          else
+            echo "any_changed=false" >> "${GITHUB_OUTPUT}"
+          fi
       - name: Fail when restricted paths change
         if: steps.changed-files.outputs.any_changed == 'true'
         run: |
