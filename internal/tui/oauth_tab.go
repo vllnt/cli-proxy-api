@@ -27,6 +27,7 @@ var oauthProviders = []oauthProvider{
 	{"Kimi (kimi.ai)", "kimi-ai-auth-url", "🟫", true},
 	{"xAI", "xai-auth-url", "⬛", true},
 	{"Meta", "meta-auth-url", "🔵", true},
+	{"Mistral (Vibe / Le Chat Pro)", "mistral-auth-url", "🟠", true},
 }
 
 // oauthTabModel handles OAuth login flows.
