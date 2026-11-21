@@ -1148,6 +1148,15 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 		baseURL = strings.TrimSpace(auth.Attributes["base_url"])
 		apiKey = strings.TrimSpace(auth.Attributes["api_key"])
 	}
+	// Credentials restored from auth files (for example Mistral sign-in) keep the key
+	// and base URL in Metadata only; Attributes stay free of the raw key so usage
+	// records never carry it.
+	if baseURL == "" {
+		baseURL = metadataString(auth.Metadata, "base_url")
+	}
+	if apiKey == "" {
+		apiKey = metadataString(auth.Metadata, "api_key")
+	}
 	return
 }
 
