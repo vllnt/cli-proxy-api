@@ -16,6 +16,7 @@ func init() {
 	registerRefreshLead("xai", func() Authenticator { return NewXAIAuthenticator() })
 	registerRefreshLead("devin", func() Authenticator { return NewDevinAuthenticator() })
 	registerRefreshLead("meta", func() Authenticator { return NewMetaAuthenticator() })
+	registerRefreshLead("mistral", func() Authenticator { return NewMistralAuthenticator() })
 }
 
 func registerRefreshLead(provider string, factory func() Authenticator) {
