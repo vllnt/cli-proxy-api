@@ -49,16 +49,19 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           # This repo is a public fork. The template default of --all on the
           # default branch would scan upstream history we do not control.
+          # Never use a bare HEAD for gitleaks --log-opts: `git log HEAD`
+          # walks every reachable commit.
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             RANGE="${PR_BASE}..${PR_HEAD}"
           elif [[ "${BEFORE:-}" != "" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then
             RANGE="${BEFORE}..HEAD"
           else
-            RANGE="HEAD"
+            RANGE="origin/${DEFAULT_BRANCH}..HEAD"
           fi
           echo "range=$RANGE" >> "$GITHUB_OUTPUT"
           echo "Using commit range $RANGE"
