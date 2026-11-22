@@ -1058,6 +1058,7 @@ var oauthV8Provider = map[string]string{
 	"xai-auth-url":         "xai",
 	"devin-auth-url":       "devin",
 	"meta-auth-url":        "meta",
+	"mistral-auth-url":     "mistral",
 }
 
 // StartOAuthFlow begins an OAuth login for the given provider. It prefers the

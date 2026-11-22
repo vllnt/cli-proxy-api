@@ -21,6 +21,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/kimi"
 	metaauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/meta"
+	mistralauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/mistral"
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
@@ -69,6 +70,11 @@ type metaOAuthService interface {
 	CreateTokenStorage(bundle *metaauth.MetaAuthBundle) *metaauth.MetaTokenStorage
 }
 
+type mistralOAuthService interface {
+	StartSignIn(ctx context.Context) (*mistralauth.SignIn, error)
+	WaitForSignIn(ctx context.Context, signIn *mistralauth.SignIn) (*mistralauth.Credential, error)
+}
+
 var (
 	newClaudeOAuthService = func(cfg *config.Config, proxyURL string) claudeOAuthService {
 		return claude.NewClaudeAuthWithProxyURL(cfg, proxyURL)
@@ -81,6 +87,9 @@ var (
 	}
 	newMetaOAuthService = func(cfg *config.Config, proxyURL string) metaOAuthService {
 		return metaauth.NewMetaAuthWithProxyURL(cfg, proxyURL)
+	}
+	newMistralOAuthService = func(cfg *config.Config, proxyURL string) mistralOAuthService {
+		return mistralauth.NewMistralAuthWithProxyURL(cfg, proxyURL)
 	}
 )
 
@@ -422,7 +431,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 
 func isIdentitylessOAuthProvider(provider string) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(provider))
-	return trimmed == "kimi" || trimmed == "kimi-ai"
+	return trimmed == "kimi" || trimmed == "kimi-ai" || trimmed == "mistral"
 }
 
 func matchesOAuthRecoveryTarget(target oauthRecoveryTarget, email, accountID, candidateFileName string) bool {
@@ -1075,6 +1084,68 @@ func (h *Handler) RequestMetaToken(c *gin.Context) {
 
 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
 		fmt.Println("You can now use Meta services through this CLI")
+	}()
+
+	c.JSON(200, response)
+}
+
+// RequestMistralToken starts the Mistral Vibe browser sign-in. The caller opens the
+// returned url; progress and cancellation use the generic OAuth status/session routes.
+func (h *Handler) RequestMistralToken(c *gin.Context) {
+	ctx := context.Background()
+	ctx = PopulateAuthContext(ctx, c)
+
+	fmt.Println("Initializing Mistral authentication...")
+
+	sessionProxyURL := oauthSessionProxyURLFromContext(c)
+	cfg := h.oauthConfigWithProxy(sessionProxyURL)
+	state := fmt.Sprintf("mistral-%d", time.Now().UnixNano())
+	authSvc := newMistralOAuthService(cfg, sessionProxyURL)
+
+	signIn, errStartSignIn := authSvc.StartSignIn(ctx)
+	if errStartSignIn != nil {
+		log.Errorf("Failed to start Mistral sign-in: %s", redactSessionProxyInString(errStartSignIn.Error(), sessionProxyURL))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start sign-in"})
+		return
+	}
+
+	RegisterOAuthSessionWithProxy(state, "mistral", sessionProxyURL)
+	response := gin.H{
+		"status":     "ok",
+		"url":        strings.TrimSpace(signIn.URL),
+		"state":      state,
+		"flow":       "device",
+		"expires_in": int(signIn.Lifetime / time.Second),
+	}
+	bindOAuthSessionTarget(c, state, response)
+
+	go func() {
+		pollCtx, cancelPoll := context.WithCancel(ctx)
+		defer cancelPoll()
+		go watchOAuthSessionCancel(pollCtx, cancelPoll, state, "mistral")
+
+		fmt.Println("Waiting for Mistral authentication...")
+		cred, errWaitForSignIn := authSvc.WaitForSignIn(pollCtx, signIn)
+		if errWaitForSignIn != nil {
+			if !IsOAuthSessionPending(state, "mistral") {
+				return
+			}
+			log.Errorf("Mistral authentication failed: %s", redactSessionProxyInString(errWaitForSignIn.Error(), sessionProxyURL))
+			SetOAuthSessionError(state, redactSessionProxyInString(oauthSessionErrorWithCause("Authentication failed", errWaitForSignIn), sessionProxyURL))
+			return
+		}
+		if !IsOAuthSessionPending(state, "mistral") {
+			return
+		}
+
+		record := sdkAuth.NewMistralAuthRecord(cred)
+		savedPath, okSaved := h.commitAndCompleteBuiltinOAuthSession(ctx, state, "mistral", sessionProxyURL, record, "Failed to save token to file", false)
+		if !okSaved {
+			return
+		}
+
+		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+		fmt.Println("You can now use Mistral services through this CLI")
 	}()
 
 	c.JSON(200, response)

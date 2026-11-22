@@ -265,6 +265,36 @@ func TestClient_V8OAuthStartPrefersSharedEndpoint(t *testing.T) {
 	}
 }
 
+// TestOAuthProvidersMapToV8Providers keeps the TUI provider list and the v8 provider
+// table in step, and checks the Mistral entry starts a device-style v8 flow.
+func TestOAuthProvidersMapToV8Providers(t *testing.T) {
+	var mistral *oauthProvider
+	for i, p := range oauthProviders {
+		if oauthV8Provider[p.apiPath] == "" {
+			t.Errorf("provider %q (%s) has no v8 provider mapping", p.name, p.apiPath)
+		}
+		if p.apiPath == "mistral-auth-url" {
+			mistral = &oauthProviders[i]
+		}
+	}
+	if mistral == nil || !mistral.deviceFlow {
+		t.Fatalf("expected a Mistral device-flow entry in oauthProviders, got %+v", mistral)
+	}
+
+	var gotProvider string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProvider = r.URL.Query().Get("provider")
+		writeJSON(t, w, map[string]any{"url": "https://x", "state": "s", "flow": "device"})
+	}))
+	defer srv.Close()
+	if _, err := NewClientWithBaseURL(srv.URL, "secret").StartOAuthFlow(mistral.apiPath); err != nil {
+		t.Fatalf("StartOAuthFlow: %v", err)
+	}
+	if gotProvider != "mistral" {
+		t.Fatalf("provider = %q, want mistral", gotProvider)
+	}
+}
+
 // TestClient_V8MissingNodeWrites verifies that an absent config node is treated
 // as an empty value on the v8 contract (not a missing route), so the TUI can
 // create the first access.api-keys entry and reads empty provider lists.

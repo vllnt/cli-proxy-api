@@ -164,7 +164,7 @@ retain the corresponding business operation's fields.
 
 The login URL is shared by all providers. Set the required `provider` query
 parameter to `claude`, `codex`, `antigravity`, `kimi`, `kimi-ai`, `xai`, `devin`,
-`meta`, or a registered plugin provider ID. For example:
+`meta`, `mistral`, or a registered plugin provider ID. For example:
 
 ```http
 GET /v8/management/oauth/auth-url?provider=codex
@@ -188,6 +188,16 @@ callback URL. If `provider` is omitted, it is inferred from the pending state;
 an explicit provider must match that state. Poll until the status is `ok` or
 `error`; `wait` means the login is still pending. Callback acceptance alone does
 not mean credential exchange and persistence have completed.
+
+`mistral` signs in a Mistral Vibe or Le Chat Pro account through the browser.
+The response has `flow: "device"`, the sign-in `url` to open, the `state`, and
+`expires_in` (seconds); there is no `user_code`. Poll `/oauth/status` until it is
+`ok` or `error`, or cancel with `DELETE /oauth/session`. A successful sign-in
+saves `mistral-<hash>.json` (mode `0600`) holding an API key that does not
+expire and has no refresh token. Requests use that key against
+`https://api.mistral.ai/v1`. If Mistral rejects the key, re-run the sign-in
+with `name` set to the credential file to replace it in place. The CLI flag is
+`--mistral-login`.
 
 Import uses `POST /v8/management/oauth/import?provider=vertex`. The `provider`
 query parameter is required; Vertex is currently the supported import provider.
