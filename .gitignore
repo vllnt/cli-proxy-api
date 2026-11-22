@@ -69,3 +69,6 @@ docker-compose.override.yml
 
 # Local LLM Wiki vault
 .llm-wiki
+
+# Private privacy-guard patterns (never commit)
+.privacy-denylist.local
