@@ -1,0 +1,86 @@
+# Privacy Guard for a public fork of an upstream we do not control.
+# Required status check name: "Privacy Guard".
+#
+# Copied from vllnt/skills references/capabilities/release-readiness/templates/privacy-guard.yml
+# and scoped: full-history gitleaks and the working-tree denylist fail on
+# upstream fixtures and test data (they are not in our control). This job
+# still runs the template's tests, gitleaks over the new-commit range, and
+# check-commit-emails.sh over the new-commit range (PR or pushed range).
+# Do not print secret or personal values in logs.
+
+name: Privacy Guard
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: privacy-guard-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  privacy-guard:
+    name: Privacy Guard
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$archive" "$base/$archive"
+          curl -sSfL -o "$RUNNER_TEMP/checksums.txt" "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          (cd "$RUNNER_TEMP" && grep " ${archive}\$" checksums.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Resolve new-commit range
+        id: range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # This repo is a public fork. The template default of --all on the
+          # default branch would scan upstream history we do not control.
+          # Never use a bare HEAD for gitleaks --log-opts: `git log HEAD`
+          # walks every reachable commit.
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            RANGE="${PR_BASE}..${PR_HEAD}"
+          elif [[ "${BEFORE:-}" != "" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then
+            RANGE="${BEFORE}..HEAD"
+          else
+            RANGE="origin/${DEFAULT_BRANCH}..HEAD"
+          fi
+          echo "range=$RANGE" >> "$GITHUB_OUTPUT"
+          echo "Using commit range $RANGE"
+      - name: Scan new commits for secrets
+        run: |
+          set -euo pipefail
+          range="${{ steps.range.outputs.range }}"
+          if [[ "$range" == "HEAD" ]]; then
+            git rev-list -n 1 HEAD >/dev/null
+          elif ! git rev-list "$range" | grep -q .; then
+            echo "No new commits in range; skipping gitleaks"
+            exit 0
+          fi
+          gitleaks detect --source . --log-opts="$range" --redact --no-banner --exit-code 1
+      - name: Test denylist guard
+        run: bash scripts/test-privacy-denylist.sh
+      - name: Test commit-metadata email check
+        run: bash scripts/test-check-commit-emails.sh
+      - name: Check commit emails and trailers
+        env:
+          PRIVACY_COMMIT_RANGE: ${{ steps.range.outputs.range }}
+        run: bash scripts/check-commit-emails.sh
