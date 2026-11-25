@@ -139,6 +139,9 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	if hasUnauthorizedAuthFailure(a) || hasDisabledInvalidGrantFailure(a) {
 		return false
 	}
+	if next, due := m.claudeQuotaRevalidateAt(a, now); due && !next.After(now) {
+		return true
+	}
 	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
 		return false
 	}
@@ -366,7 +369,9 @@ func (m *Manager) markRefreshPending(loop *authAutoRefreshLoop, id string, regis
 		m.mu.Unlock()
 		return nil
 	}
-	if m.refreshJobs[id] != nil || (!auth.NextRefreshAfter.IsZero() && now.Before(auth.NextRefreshAfter)) {
+	quotaAt, quotaScheduled := m.claudeQuotaRevalidateAt(auth, now)
+	quotaDue := quotaScheduled && !quotaAt.After(now)
+	if m.refreshJobs[id] != nil || (!quotaDue && !auth.NextRefreshAfter.IsZero() && now.Before(auth.NextRefreshAfter)) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -375,12 +380,17 @@ func (m *Manager) markRefreshPending(loop *authAutoRefreshLoop, id string, regis
 		registrationEpoch: registrationEpoch,
 		pendingUntil:      now.Add(refreshPendingBackoff),
 		loop:              loop,
+		quotaReconcile:    quotaDue,
 	}
 	if m.refreshJobs == nil {
 		m.refreshJobs = make(map[string]*authRefreshJob)
 	}
 	m.refreshJobs[id] = job
-	auth.NextRefreshAfter = job.pendingUntil
+	if quotaDue {
+		auth.QuotaReconcile.NextCheckAt = now.Add(claudeQuotaRevalidateInterval)
+	} else {
+		auth.NextRefreshAfter = job.pendingUntil
+	}
 	auth.Generation++
 	auth.UpdatedAt = now
 	m.mu.Unlock()
@@ -407,7 +417,7 @@ func (m *Manager) finishRefreshJob(job *authRefreshJob, retryAt time.Time, queue
 		return
 	}
 	delete(m.refreshJobs, job.id)
-	if auth := m.auths[job.id]; auth != nil && auth.RegistrationEpoch == job.registrationEpoch && auth.NextRefreshAfter.Equal(job.pendingUntil) {
+	if auth := m.auths[job.id]; !job.quotaReconcile && auth != nil && auth.RegistrationEpoch == job.registrationEpoch && auth.NextRefreshAfter.Equal(job.pendingUntil) {
 		// Clear only this job's pending marker, preserving newer refresh outcomes.
 		auth.NextRefreshAfter = retryAt
 		auth.Generation++

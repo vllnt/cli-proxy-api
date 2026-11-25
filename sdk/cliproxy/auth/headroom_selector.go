@@ -61,6 +61,11 @@ func (m *claudeUsageMemory) readWindows(auths []*Auth, now time.Time) [][len(cla
 			signals[strings.ToLower(key)] = strings.TrimSpace(value)
 		}
 		known := m.seen[auth.ID]
+		if signals["anthropic-usage-source"] == "oauth_usage" {
+			// A fresh usage read replaces the whole snapshot, including null
+			// windows. Do not retain a rejected pre-reconciliation cache entry.
+			known = [len(claudeWindows)]windowUsage{}
+		}
 		for w, window := range claudeWindows {
 			if reading, ok := readClaudeWindow(signals, window.name); ok {
 				known[w] = reading
@@ -199,6 +204,15 @@ func (s *HeadroomSelector) usage(auths []*Auth, now time.Time) ([]float64, []int
 // readClaudeWindow parses one unified window from lower-cased signals. A
 // rejected window reads as fully used.
 func readClaudeWindow(signals map[string]string, window string) (windowUsage, bool) {
+	if signals["anthropic-usage-source"] == "oauth_usage" {
+		prefix := "anthropic-usage-" + claudeUsageName(window) + "-"
+		used, errUsed := strconv.ParseFloat(signals[prefix+"utilization"], 64)
+		reset, errReset := time.Parse(time.RFC3339Nano, signals[prefix+"resets-at"])
+		if errUsed != nil || errReset != nil || used < 0 || used > 100 {
+			return windowUsage{}, false
+		}
+		return windowUsage{used: used / 100, reset: reset}, true
+	}
 	prefix := "anthropic-ratelimit-unified-" + window + "-"
 	reset, errReset := strconv.ParseInt(signals[prefix+"reset"], 10, 64)
 	if errReset != nil {

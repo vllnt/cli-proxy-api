@@ -2191,7 +2191,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	// A newly exhausted Devin credential must join the refresh schedule so
 	// quota revalidation can detect early restoration (issue #6690).
 	if authSnapshot != nil {
-		if _, due := devinQuotaRevalidateAt(authSnapshot, now); due {
+		_, claudeQuotaDue := m.claudeQuotaRevalidateAt(authSnapshot, now)
+		if _, due := devinQuotaRevalidateAt(authSnapshot, now); due || claudeQuotaDue {
 			m.queueRefreshReschedule(result.AuthID)
 		} else if scheduleUnauthorizedRefresh {
 			m.queueRefreshReschedule(result.AuthID)

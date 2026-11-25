@@ -17,6 +17,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Test Claude quota reconciliation
+        env:
+          CGO_ENABLED: "0"
+        run: go test -tags purego -count=1 -run '(ClaudeQuota|ManagementQuotaReconcile)' ./sdk/cliproxy/auth ./internal/api
       - name: Refresh models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Build
