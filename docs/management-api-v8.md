@@ -133,6 +133,7 @@ retain the corresponding business operation's fields.
 | `/server/latest-version` | GET | Get latest release information. |
 | `/requests/api-call` | POST | Make an authenticated upstream call. |
 | `/routing/cooldown/reset` | POST | Clear credential cooldown. |
+| `/routing/quota/reconcile` | POST | Re-read Claude OAuth usage and selectively reconcile proven restored quota. |
 | `/routing/model-definitions/<channel>` | GET | Get model definitions. |
 | `/observability/logs` | GET, DELETE | Read or clear application logs. |
 | `/observability/logs/errors` | GET | List error-log files. |
@@ -308,3 +309,52 @@ accepts legacy, new, or mixed layouts, normalizing v8 documents on save.
 
 Plugin OAuth uses the shared v8 login endpoint. Other plugin-defined HTTP
 extensions retain their declared `/v0/management` routes.
+
+### Claude OAuth quota reconciliation
+
+`POST /v8/management/routing/quota/reconcile` accepts exactly
+`{"auth_index":"<runtime-index>"}` under the usual management authentication.
+It makes one non-spending `GET https://api.anthropic.com/api/oauth/usage` using
+the stored OAuth token. It never redeems a grant, renews a token, or runs inference.
+Caller-supplied URLs, headers, proxy settings, and usage values are rejected.
+Redirects are refused. This control-plane read has a 30-second deadline so a
+stalled provider cannot hold the shared OAuth refresh workers indefinitely;
+inference timeout behavior is unchanged.
+
+A valid fresh observation clears only quota restrictions attributed to windows
+that are now known below 100%. Missing/null claimed windows, stale reset timestamps, unrecognized claims,
+and any applicable exhausted window retain the restriction. An unrelated null
+window remains unknown: for example, fresh weekly headroom can clear a stored
+weekly-only block even if the short window is null, but it cannot clear a stored
+short-window block.
+Independent model errors, disabled credentials/models, and active forced
+cooldowns remain. Token, registration, file, or routing changes during the read
+make its result stale and prevent application.
+
+Success returns `status:"ok"`, `auth_index`, `outcome` (`reconciled`, `unchanged`,
+or `blocked`), `observed_at`, `models`, `remaining_quota_blocks`, and
+`persistence:"ok"`. A reconciled credential can still have independent blocked
+models. A failed cooldown-store write returns HTTP 503 with `status:"partial"`,
+`runtime_applied:true`, and `persistence:"failed"`; retrying this same endpoint
+repairs persistence without spending or redeeming again. A stale read returns
+409 with `runtime_applied:false`. Unsupported credentials return 400, missing
+indexes 404, and unavailable/malformed usage 502.
+
+The existing refresh loop also checks locally quota-blocked enabled Claude OAuth
+credentials every 15 minutes, including a retry floor after stale/error attempts.
+It uses the same guarded operation and leaves token-renewal scheduling intact.
+A pending persistence failure remains eligible for retry after routing recovers.
+Home-managed, disabled, invalid-token, and signed-out credentials are excluded.
+
+Credential lists expose `snapshot_at` for list generation time. Per-credential
+`quota.observed_at` is the time of the last actual provider observation; listing
+or failed reconciliation never refreshes it. `quota.signals` replaces the whole
+passive snapshot and carries `Anthropic-Usage-Source: oauth_usage`, percentage
+values (0–100) under `Anthropic-Usage-<window>-Utilization`, and optional RFC3339
+`Anthropic-Usage-<window>-Resets-At`. Windows are `five_hour`, `seven_day`,
+`seven_day_opus`, `seven_day_sonnet`, and `seven_day_oauth_apps`; null/missing
+windows are omitted and remain unknown. Previous rejected response headers are
+not merged into this snapshot. `quota_reconciliation` separately exposes the last
+attempt, next retry, status, and persistence-pending flag. These observations are
+runtime-only; the existing cooldown-store format is unchanged and remains
+readable by the previous release.

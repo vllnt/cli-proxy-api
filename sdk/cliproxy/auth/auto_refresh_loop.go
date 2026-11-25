@@ -36,6 +36,7 @@ type authRefreshJob struct {
 	pendingUntil      time.Time
 	loop              *authAutoRefreshLoop
 	running           bool // guarded by manager.mu
+	quotaReconcile    bool
 }
 
 func newAuthAutoRefreshLoop(manager *Manager, interval time.Duration, concurrency int) *authAutoRefreshLoop {
@@ -100,11 +101,20 @@ func (l *authAutoRefreshLoop) worker(ctx context.Context) {
 			if job == nil {
 				continue
 			}
-			if l.manager.beginRefreshJob(ctx, job) {
-				_, _ = l.manager.refreshAuthForRequestAtEpoch(ctx, job.id, "", job.registrationEpoch)
-			}
-			l.manager.finishRefreshJob(job, time.Time{}, false)
+			l.runRefreshJob(ctx, job)
 		}
+	}
+}
+
+func (l *authAutoRefreshLoop) runRefreshJob(ctx context.Context, job *authRefreshJob) {
+	defer l.manager.finishRefreshJob(job, time.Time{}, false)
+	if !l.manager.beginRefreshJob(ctx, job) {
+		return
+	}
+	if job.quotaReconcile {
+		_, _ = l.manager.reconcileClaudeQuota(ctx, job.id, job.registrationEpoch)
+	} else {
+		_, _ = l.manager.refreshAuthForRequestAtEpoch(ctx, job.id, "", job.registrationEpoch)
 	}
 }
 
@@ -278,6 +288,8 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 	next, shouldSchedule := manager.nextRefreshCheckAt(now, auth, l.interval)
 	shouldRefresh := manager.shouldRefresh(auth, now)
 	exec, _ := manager.executorLocked(executorKeyFromAuth(auth))
+	quotaAt, quotaScheduled := manager.claudeQuotaRevalidateAt(auth, now)
+	quotaDue := quotaScheduled && !quotaAt.After(now)
 	registrationEpoch := auth.RegistrationEpoch
 	manager.mu.RUnlock()
 
@@ -291,7 +303,7 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 		return
 	}
 
-	if exec == nil {
+	if exec == nil && !quotaDue {
 		l.upsert(authID, now.Add(l.interval))
 		return
 	}
@@ -398,7 +410,16 @@ func (m *Manager) nextRefreshCheckAt(now time.Time, auth *Auth, interval time.Du
 	if m.codexAutoRefreshUnavailable(auth, now) {
 		return time.Time{}, false
 	}
-	return nextRefreshCheckAt(now, auth, interval)
+	if auth != nil {
+		if job := m.refreshJobs[auth.ID]; job != nil && job.quotaReconcile {
+			return job.pendingUntil, true
+		}
+	}
+	next, scheduled := nextRefreshCheckAt(now, auth, interval)
+	if quotaAt, quotaScheduled := m.claudeQuotaRevalidateAt(auth, now); quotaScheduled && (!scheduled || quotaAt.Before(next)) {
+		return quotaAt, true
+	}
+	return next, scheduled
 }
 
 func nextRefreshCheckAt(now time.Time, auth *Auth, interval time.Duration) (time.Time, bool) {

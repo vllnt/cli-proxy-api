@@ -397,6 +397,7 @@ func (m *Manager) updateInternalLocked(ctx context.Context, base, auth *Auth, mo
 		auth.CredentialVersion = max(auth.CredentialVersion, existingVersion) + 1
 	} else {
 		auth.CredentialVersion = existingVersion
+		auth.QuotaReconcile = existing.QuotaReconcile
 	}
 	cooldownStateChanged := false
 	now := time.Now()

@@ -173,7 +173,7 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 		nameJ, _ := files[j]["name"].(string)
 		return strings.ToLower(nameI) < strings.ToLower(nameJ)
 	})
-	c.JSON(200, gin.H{"observed_at": observedAt, "files": files})
+	c.JSON(200, gin.H{"observed_at": observedAt, "snapshot_at": observedAt, "files": files})
 }
 
 func parseAuthFilesPagination(c *gin.Context) (authFilesPagination, error) {
@@ -219,7 +219,7 @@ func (p authFilesPagination) bounds(total int) (int, int) {
 }
 
 func authFilesListResponse(observedAt time.Time, files []gin.H, pagination authFilesPagination, total, end int) gin.H {
-	response := gin.H{"observed_at": observedAt, "files": files}
+	response := gin.H{"observed_at": observedAt, "snapshot_at": observedAt, "files": files}
 	if pagination.enabled {
 		response["total"] = total
 		response["page"] = pagination.page
@@ -688,6 +688,9 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
 	entry["failed"] = auth.Failed
 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
 	entry["quota"] = quotaObservationPayloadForProvider(auth.Provider, auth.Quota)
+	if strings.EqualFold(auth.Provider, "claude") {
+		entry["quota_reconciliation"] = auth.QuotaReconcile
+	}
 	if modelQuotas := modelQuotaObservationPayload(auth.Provider, auth.ModelStates); len(modelQuotas) > 0 {
 		entry["model_quotas"] = modelQuotas
 	}
