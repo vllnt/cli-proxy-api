@@ -16,9 +16,9 @@ func TestCodexConfigurationUpdateCapability(t *testing.T) {
 		capable []string
 	}{
 		{name: "free", models: GetCodexFreeModels, capable: []string{"gpt-6-luna"}},
-		{name: "team", models: GetCodexTeamModels, capable: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
-		{name: "plus", models: GetCodexPlusModels, capable: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
-		{name: "pro", models: GetCodexProModels, capable: []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
+		{name: "team", models: GetCodexTeamModels, capable: []string{"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
+		{name: "plus", models: GetCodexPlusModels, capable: []string{"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
+		{name: "pro", models: GetCodexProModels, capable: []string{"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}},
 	} {
 		t.Run(tier.name, func(t *testing.T) {
 			byID := make(map[string]*ModelInfo)
